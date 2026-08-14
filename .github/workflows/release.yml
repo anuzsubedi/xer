@@ -72,22 +72,34 @@ jobs:
           DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
         run: scripts/build-release.sh "$RELEASE_TAG" "$GITHUB_RUN_NUMBER"
 
-      - name: Create draft GitHub release and upload installers
+      - name: Create or update GitHub release assets
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           VERSION="${RELEASE_TAG#v}"
-          gh release create "$RELEASE_TAG" \
-            dist/xer.dmg \
-            dist/xer.app.zip \
-            dist/xer-dSYMs.zip \
-            dist/SHA256SUMS \
-            --draft \
-            --verify-tag \
-            --title "xer $VERSION" \
-            --notes "Signed and notarized macOS release."
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" \
+              dist/xer.dmg \
+              dist/xer.app.zip \
+              dist/xer-dSYMs.zip \
+              dist/SHA256SUMS \
+              --clobber
+            gh release edit "$RELEASE_TAG" \
+              --title "xer $VERSION" \
+              --notes "Signed and notarized macOS release."
+          else
+            gh release create "$RELEASE_TAG" \
+              dist/xer.dmg \
+              dist/xer.app.zip \
+              dist/xer-dSYMs.zip \
+              dist/SHA256SUMS \
+              --draft \
+              --verify-tag \
+              --title "xer $VERSION" \
+              --notes "Signed and notarized macOS release."
+          fi
 
       - name: Publish GitHub release
         shell: bash
