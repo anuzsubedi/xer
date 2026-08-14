@@ -236,12 +236,49 @@ final class DeveloperTooling: @unchecked Sendable {
         let environment: [String: String]? = artifact.destination.kind == .simulator && includeUnifiedLogs
             ? ["SIMCTL_CHILD_OS_ACTIVITY_DT_MODE": "YES"]
             : nil
+
+        if artifact.destination.kind == .simulator {
+            do {
+                try await activateSimulator(for: artifact.destination)
+            } catch {
+                // Showing Simulator is a convenience, not part of deployment.
+                // Keep the app launch working if Launch Services cannot present
+                // the window, but make the recovery path visible in the console.
+                outputHandler?(ProcessOutput(
+                    stream: .standardError,
+                    text: "Simulator could not be brought forward: \(error.localizedDescription)\n"
+                ))
+            }
+        }
+
         let result = try await invoke(
             arguments,
             environment: environment,
             outputHandler: outputHandler
         )
         try check(result, arguments: arguments)
+    }
+
+    @MainActor
+    private func activateSimulator(for destination: Destination) async throws {
+        guard let simulatorURL = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: "com.apple.iphonesimulator"
+        ) else {
+            throw AppFailure(message: "Simulator.app could not be found.")
+        }
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        configuration.allowsRunningApplicationSubstitution = true
+        // When Simulator is not already running, this selects the exact device
+        // xer is about to launch onto. If it is running, Launch Services still
+        // activates its existing instance so the device window becomes visible.
+        configuration.arguments = ["-CurrentDeviceUDID", destination.udid]
+
+        _ = try await NSWorkspace.shared.openApplication(
+            at: simulatorURL,
+            configuration: configuration
+        )
     }
 
     /// Compatibility/convenience entry point for callers that do not need the
