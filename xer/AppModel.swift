@@ -18,9 +18,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var projectIcons: [String: AppIcon] = [:]
     @Published var destinationSearchQuery = ""
     @Published var buildConfiguration = "Debug"
-    @Published var cleanBuildFolder = true
+    @Published var cleanBuildFolder = false
     @Published var openConsoleForOutput = true
-    @Published var includeUnifiedLogs = true
+    @Published var includeUnifiedLogs = false
     @Published var automaticallySelectRunningDestination = false
     @Published private(set) var selectedProjectID: String?
     @Published var selectedDestinationIDs: Set<String> = []
