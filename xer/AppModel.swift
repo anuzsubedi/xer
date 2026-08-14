@@ -399,7 +399,7 @@ final class AppModel: ObservableObject {
         lastErrorMessage = nil
         installedApps.removeAll()
         latestBuildArtifacts.removeAll()
-        operationState = .building(completed: 0, total: context.destinations.count)
+        operationState = .preparingBuild
         appendLog(.command, "Building \(context.scheme) for \(context.destinations.count) destination(s).")
 
         operationTask = Task { @MainActor [weak self] in
@@ -433,7 +433,7 @@ final class AppModel: ObservableObject {
             return
         }
         let artifacts = selectedDestinations.compactMap { latestBuildArtifacts[$0.id] }
-        operationState = .deploying(completed: 0, total: artifacts.count)
+        operationState = .installing(completed: 0, total: artifacts.count)
         appendLog(.command, "Installing the latest build on \(artifacts.count) destination(s).")
         operationTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -455,7 +455,7 @@ final class AppModel: ObservableObject {
                     return await group.reduce(into: []) { $0.append($1) }
                 }
                 completed += batch.count
-                self.operationState = .deploying(completed: completed, total: artifacts.count)
+                self.operationState = .installing(completed: completed, total: artifacts.count)
                 for result in results {
                     if let error = result.errorMessage {
                         failures.append("\(result.destination.name): \(error)")
@@ -507,7 +507,7 @@ final class AppModel: ObservableObject {
         let shouldCleanBuildFolder = cleanBuildFolder
         let shouldAttachConsole = openConsoleForOutput
         let shouldIncludeUnifiedLogs = includeUnifiedLogs
-        operationState = .building(completed: 0, total: destinations.count)
+        operationState = .preparingBuild
         appendLog(.command, "Starting bounded build/deploy for \(destinations.count) destination(s), max concurrency \(Self.maxConcurrentDestinationOperations).")
         for destination in destinations {
             let derivedDataURL = AppPaths.derivedDataURL(
@@ -764,7 +764,10 @@ final class AppModel: ObservableObject {
         for batch in destinations.batches(of: Self.maxConcurrentDestinationOperations) {
             let batchOutcomes = await withTaskGroup(of: BuildOutcome.self, returning: [BuildOutcome].self) { group in
                 for destination in batch {
-                    let handler = outputHandler(label: "build \(destination.name)")
+                    let handler = outputHandler(
+                        label: "build \(destination.name)",
+                        buildProgressTotal: destinations.count
+                    )
                     group.addTask { [tooling, project, scheme, destination, configuration, cleanBuildFolder, handler] in
                         do {
                             let derivedDataURL = AppPaths.derivedDataURL(
@@ -828,7 +831,10 @@ final class AppModel: ObservableObject {
             for batch in destinations.batches(of: Self.maxConcurrentDestinationOperations) {
                 let batchOutcomes = await withTaskGroup(of: BuildOutcome.self, returning: [BuildOutcome].self) { group in
                     for destination in batch {
-                        let handler = outputHandler(label: "build \(destination.name)")
+                        let handler = outputHandler(
+                            label: "build \(destination.name)",
+                            buildProgressTotal: destinations.count
+                        )
                         group.addTask { [tooling, project, scheme, destination, configuration, cleanBuildFolder, handler] in
                             do {
                                 let derivedDataURL = AppPaths.derivedDataURL(
@@ -894,7 +900,7 @@ final class AppModel: ObservableObject {
 
             var deployOutcomes: [DeployOutcome] = []
             var completedDeployments = 0
-            operationState = .deploying(completed: 0, total: artifacts.count)
+            operationState = .installing(completed: 0, total: artifacts.count)
             for batch in artifacts.batches(of: Self.maxConcurrentDestinationOperations) {
                 let batchOutcomes = await withTaskGroup(of: DeployOutcome.self, returning: [DeployOutcome].self) { group in
                     for artifact in batch {
@@ -925,7 +931,7 @@ final class AppModel: ObservableObject {
                 }
                 deployOutcomes.append(contentsOf: batchOutcomes)
                 completedDeployments += batch.count
-                operationState = .deploying(completed: completedDeployments, total: artifacts.count)
+                operationState = .installing(completed: completedDeployments, total: artifacts.count)
 
                 for outcome in batchOutcomes {
                     if let errorMessage = outcome.errorMessage {
@@ -982,7 +988,7 @@ final class AppModel: ObservableObject {
             // commands attach to the app console (`--console`) and therefore
             // must remain awaited; returning immediately here would close the
             // output stream while the selected app is still running.
-            operationState = .streaming
+            operationState = .launching
             appendLog(.info, includeUnifiedLogs
                 ? "Launching installed app(s) with standard streams and unified Logger/OSLog forwarding. Stop the app or cancel to end the stream."
                 : (attachConsole
@@ -990,7 +996,10 @@ final class AppModel: ObservableObject {
                     : "Launching installed app(s)."))
             let launchOutcomes = await withTaskGroup(of: LaunchOutcome.self, returning: [LaunchOutcome].self) { group in
                 for artifact in launchableArtifacts {
-                    let handler = outputHandler(label: "console \(artifact.destination.name)")
+                    let handler = outputHandler(
+                        label: "console \(artifact.destination.name)",
+                        marksAppRunning: true
+                    )
                     group.addTask { [tooling, artifact, handler] in
                         do {
                             try await tooling.launch(
@@ -1059,10 +1068,26 @@ final class AppModel: ObservableObject {
         selectedSchemeByProject[projectID] = schemes.first?.name
     }
 
-    private func outputHandler(label: String) -> ProcessRunner.OutputHandler {
+    private func outputHandler(
+        label: String,
+        buildProgressTotal: Int? = nil,
+        marksAppRunning: Bool = false
+    ) -> ProcessRunner.OutputHandler {
         { [weak self] output in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                if let buildProgressTotal {
+                    self.updateBuildPhase(
+                        from: output.text,
+                        totalDestinations: buildProgressTotal
+                    )
+                }
+                if marksAppRunning,
+                   output.stream == .standardOutput,
+                   !output.text.xerTrimmed.isEmpty,
+                   self.operationState == .launching {
+                    self.operationState = .running
+                }
                 let level: LogEntry.Level = output.stream == .standardError ? .warning : .info
                 // Preserve chunk boundaries and whitespace. Pipe reads are not
                 // guaranteed to end on line boundaries; trimming every chunk
@@ -1070,6 +1095,23 @@ final class AppModel: ObservableObject {
                 self.appendLog(level, "[\(label)] \(output.text)", preserveWhitespace: true)
             }
         }
+    }
+
+    private func updateBuildPhase(from output: String, totalDestinations: Int) {
+        guard operationState == .preparingBuild else { return }
+        let buildWorkMarkers = [
+            "CompileSwift",
+            "SwiftCompile",
+            "CompileC",
+            "Ld ",
+            "PhaseScriptExecution",
+            "ProcessInfoPlistFile",
+            "Copy ",
+            "CodeSign ",
+            "Touch "
+        ]
+        guard buildWorkMarkers.contains(where: output.contains) else { return }
+        operationState = .building(completed: 0, total: totalDestinations)
     }
 
     private func persistProject(_ project: ImportedProject) {

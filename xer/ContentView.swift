@@ -61,8 +61,13 @@ struct ContentView: View {
     @State private var autoScrollConsole = true
     @State private var removalCandidate: SidebarRemovalCandidate?
     @State private var destinationLayout: DestinationLayout = .grid
+    @State private var destinationScope: DestinationScope = .all
+    @State private var selectedDestinationOS: Set<String> = []
+    @State private var readyDestinationsOnly = false
     @State private var consoleResizeStart: Double?
+    @State private var consoleDragHeight: Double?
     @AppStorage("xer.consoleHeight") private var consoleHeight = 390.0
+    @AppStorage("xer.favoriteDestinationIDs") private var favoriteDestinationStorage = ""
     @FocusState private var isLogSearchFocused: Bool
     @FocusState private var isDestinationSearchFocused: Bool
 
@@ -322,7 +327,8 @@ struct ContentView: View {
                 let usesSplitWorkspace = proxy.size.width >= 840
                 let minimumWorkspaceHeight = usesSplitWorkspace ? 300.0 : 280.0
                 let maximumConsoleHeight = max(190.0, Double(proxy.size.height) - minimumWorkspaceHeight - 5)
-                let resolvedConsoleHeight = min(max(consoleHeight, 190.0), maximumConsoleHeight)
+                let requestedConsoleHeight = consoleDragHeight ?? consoleHeight
+                let resolvedConsoleHeight = min(max(requestedConsoleHeight, 190.0), maximumConsoleHeight)
 
                 VStack(spacing: 0) {
                     Group {
@@ -331,7 +337,10 @@ struct ContentView: View {
                     }
                     .frame(height: proxy.size.height - CGFloat(resolvedConsoleHeight) - 5)
 
-                    consoleDivider(maximumHeight: maximumConsoleHeight)
+                    consoleDivider(
+                        currentHeight: resolvedConsoleHeight,
+                        maximumHeight: maximumConsoleHeight
+                    )
 
                     logConsole
                         .frame(height: CGFloat(resolvedConsoleHeight))
@@ -586,6 +595,11 @@ struct ContentView: View {
                 .frame(width: 84)
             }
 
+            ViewThatFits(in: .horizontal) {
+                destinationFilterBar(compact: false)
+                destinationFilterBar(compact: true)
+            }
+
             if let warning = model.destinationWarning {
                 developerToolsCallout(warning)
             }
@@ -613,14 +627,14 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
-            } else if model.filteredDestinations.isEmpty {
+            } else if visibleDestinations.isEmpty {
                 ContentUnavailableView {
                     Label("No matching destinations", systemImage: "magnifyingglass")
                 } description: {
-                    Text("No device, simulator, OS version, status, or identifier matches “\(model.destinationSearchQuery)”.")
+                    Text(destinationEmptyDescription)
                 } actions: {
-                    Button("Clear Search") {
-                        model.setDestinationSearchQuery("")
+                    Button("Clear Filters") {
+                        clearDestinationFilters(includeSearch: true)
                         isDestinationSearchFocused = true
                     }
                 }
@@ -628,29 +642,14 @@ struct ContentView: View {
                 .padding(.vertical, 8)
             } else {
                 VStack(spacing: 0) {
-                    destinationGroup(
-                        title: "Mac",
-                        kind: .localMac,
-                        destinations: filteredLocalMacs
-                    )
-                    Divider()
-                    destinationGroup(
-                        title: "iOS Devices",
-                        kind: .physicalDevice,
-                        destinations: model.connectedDestinations
-                    )
-                    Divider()
-                    destinationGroup(
-                        title: "Simulators",
-                        kind: .simulator,
-                        destinations: filteredSimulators
-                    )
-                    if !filteredUnavailablePhysicalDevices.isEmpty {
-                        Divider()
+                    ForEach(Array(destinationPresentationGroups.enumerated()), id: \.element.id) { index, group in
+                        if index > 0 {
+                            Divider()
+                        }
                         destinationGroup(
-                            title: "Unavailable Devices",
-                            kind: .physicalDevice,
-                            destinations: filteredUnavailablePhysicalDevices
+                            title: group.title,
+                            kind: group.kind,
+                            destinations: group.destinations
                         )
                     }
                 }
@@ -676,6 +675,110 @@ struct ContentView: View {
                 .font(.callout.weight(.medium))
                 .foregroundStyle(model.selectedDestinations.isEmpty ? .secondary : XerTheme.action)
         }
+    }
+
+    private func destinationFilterBar(compact: Bool) -> some View {
+        HStack(spacing: compact ? 4 : 6) {
+            destinationScopeButton(.all, compact: compact)
+            destinationScopeButton(.favorites, compact: compact)
+            destinationScopeButton(.physical, compact: compact)
+            destinationScopeButton(.simulators, compact: compact)
+            destinationMoreFiltersMenu(compact: compact)
+
+            Spacer(minLength: 4)
+
+            ForEach(Array(selectedDestinationOS.sorted().prefix(compact ? 1 : 2)), id: \.self) { os in
+                DestinationFilterToken(title: os) {
+                    selectedDestinationOS.remove(os)
+                }
+            }
+
+            if selectedDestinationOS.count > (compact ? 1 : 2) {
+                Text("+\(selectedDestinationOS.count - (compact ? 1 : 2))")
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            if readyDestinationsOnly {
+                DestinationFilterToken(title: "Ready") {
+                    readyDestinationsOnly = false
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func destinationScopeButton(_ scope: DestinationScope, compact: Bool) -> some View {
+        Button {
+            destinationScope = scope
+        } label: {
+            if compact && scope != .all {
+                Image(systemName: scope.symbol)
+                    .frame(width: 14)
+            } else if scope == .all {
+                Text(scope.title)
+            } else {
+                Label(scope.title, systemImage: scope.symbol)
+            }
+        }
+        .font(.caption.weight(.medium))
+        .buttonStyle(DestinationScopeChipStyle(isSelected: destinationScope == scope))
+        .help(scope.help)
+        .accessibilityLabel(scope.title)
+        .accessibilityAddTraits(destinationScope == scope ? .isSelected : [])
+    }
+
+    private func destinationMoreFiltersMenu(compact: Bool) -> some View {
+        Menu {
+            Menu("Operating System") {
+                ForEach(availableDestinationOS, id: \.self) { os in
+                    Button {
+                        toggleDestinationOS(os)
+                    } label: {
+                        Label(os, systemImage: selectedDestinationOS.contains(os) ? "checkmark" : "circle")
+                    }
+                }
+            }
+
+            Menu("Device Type") {
+                ForEach([DestinationScope.all, .mac, .physical, .simulators]) { scope in
+                    Button {
+                        destinationScope = scope
+                    } label: {
+                        Label(scope.title, systemImage: destinationScope == scope ? "checkmark" : scope.symbol)
+                    }
+                }
+            }
+
+            Divider()
+            Toggle("Ready only", isOn: $readyDestinationsOnly)
+
+            if hasStructuredDestinationFilters {
+                Divider()
+                Button("Clear Filters") {
+                    clearDestinationFilters(includeSearch: false)
+                }
+            }
+        } label: {
+            if compact {
+                Image(systemName: "line.3.horizontal.decrease")
+                    .font(.caption.weight(.medium))
+            } else {
+                Label("More", systemImage: "line.3.horizontal.decrease")
+                    .font(.caption.weight(.medium))
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .padding(.horizontal, compact ? 6 : 8)
+        .padding(.vertical, 4)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.75)
+        }
+        .help("More destination filters")
     }
 
     @ViewBuilder
@@ -715,10 +818,14 @@ struct ContentView: View {
                     DestinationRow(
                         destination: destination,
                         isSelected: model.selectedDestinationIDs.contains(destination.id),
+                        isFavorite: favoriteDestinationIDs.contains(destination.id),
                         setSelected: { isSelected in
                             DispatchQueue.main.async {
                                 model.setDestination(destination.id, isSelected: isSelected)
                             }
+                        },
+                        setFavorite: { isFavorite in
+                            setDestinationFavorite(destination.id, isFavorite: isFavorite)
                         }
                     )
                     if index < matching.count - 1 {
@@ -735,8 +842,12 @@ struct ContentView: View {
                         DestinationGridCard(
                             destination: destination,
                             isSelected: model.selectedDestinationIDs.contains(destination.id),
+                            isFavorite: favoriteDestinationIDs.contains(destination.id),
                             setSelected: { isSelected in
                                 model.setDestination(destination.id, isSelected: isSelected)
+                            },
+                            setFavorite: { isFavorite in
+                                setDestinationFavorite(destination.id, isFavorite: isFavorite)
                             }
                         )
                     }
@@ -807,7 +918,7 @@ struct ContentView: View {
         .background(XerTheme.inspector)
     }
 
-    private func consoleDivider(maximumHeight: Double) -> some View {
+    private func consoleDivider(currentHeight: Double, maximumHeight: Double) -> some View {
         ZStack {
             Divider()
             Capsule()
@@ -822,18 +933,22 @@ struct ContentView: View {
             else { NSCursor.pop() }
         }
         .gesture(
-            DragGesture(minimumDistance: 1)
+            DragGesture(minimumDistance: 1, coordinateSpace: .global)
                 .onChanged { value in
                     if consoleResizeStart == nil {
-                        consoleResizeStart = consoleHeight
+                        consoleResizeStart = currentHeight
                     }
                     guard let consoleResizeStart else { return }
-                    consoleHeight = min(
+                    consoleDragHeight = min(
                         max(consoleResizeStart - Double(value.translation.height), 190),
                         maximumHeight
                     )
                 }
                 .onEnded { _ in
+                    if let consoleDragHeight {
+                        consoleHeight = min(max(consoleDragHeight, 190), maximumHeight)
+                    }
+                    consoleDragHeight = nil
                     consoleResizeStart = nil
                 }
         )
@@ -842,9 +957,9 @@ struct ContentView: View {
         .accessibilityAdjustableAction { direction in
             switch direction {
             case .increment:
-                consoleHeight = min(consoleHeight + 40, maximumHeight)
+                consoleHeight = min(currentHeight + 40, maximumHeight)
             case .decrement:
-                consoleHeight = max(consoleHeight - 40, 190)
+                consoleHeight = max(currentHeight - 40, 190)
             @unknown default:
                 break
             }
@@ -1032,12 +1147,66 @@ struct ContentView: View {
         .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
+    private var favoriteDestinationIDs: Set<String> {
+        Set(favoriteDestinationStorage.split(separator: "\n").map(String.init))
+    }
+
+    private var availableDestinationOS: [String] {
+        Set(model.destinations.map { destinationOSLabel($0) }).sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+    }
+
+    private var hasStructuredDestinationFilters: Bool {
+        destinationScope != .all || !selectedDestinationOS.isEmpty || readyDestinationsOnly
+    }
+
+    private var visibleDestinations: [Destination] {
+        let matches = model.filteredDestinations.filter { destination in
+            let matchesScope: Bool
+            switch destinationScope {
+            case .all:
+                matchesScope = true
+            case .favorites:
+                matchesScope = favoriteDestinationIDs.contains(destination.id)
+            case .mac:
+                matchesScope = destination.kind == .localMac
+            case .physical:
+                matchesScope = destination.kind == .physicalDevice
+            case .simulators:
+                matchesScope = destination.kind == .simulator
+            }
+
+            return matchesScope
+                && (selectedDestinationOS.isEmpty || selectedDestinationOS.contains(destinationOSLabel(destination)))
+                && (!readyDestinationsOnly || destination.isReadyForDevelopment)
+        }
+
+        let sorted = Destination.sorted(matches)
+        return sorted.filter { favoriteDestinationIDs.contains($0.id) }
+            + sorted.filter { !favoriteDestinationIDs.contains($0.id) }
+    }
+
     private var filteredSimulators: [Destination] {
-        model.filteredDestinations.filter { $0.kind == .simulator }
+        visibleDestinations.filter { $0.kind == .simulator }
     }
 
     private var filteredLocalMacs: [Destination] {
-        model.filteredDestinations.filter { $0.kind == .localMac }
+        visibleDestinations.filter { $0.kind == .localMac }
+    }
+
+    private var filteredConnectedDestinations: [Destination] {
+        visibleDestinations.filter { $0.kind == .physicalDevice && $0.isConnected }
+    }
+
+    private var destinationPresentationGroups: [DestinationPresentationGroup] {
+        [
+            DestinationPresentationGroup(id: "mac", title: "Mac", kind: .localMac, destinations: filteredLocalMacs),
+            DestinationPresentationGroup(id: "physical", title: "iOS Devices", kind: .physicalDevice, destinations: filteredConnectedDestinations),
+            DestinationPresentationGroup(id: "simulators", title: "Simulators", kind: .simulator, destinations: filteredSimulators),
+            DestinationPresentationGroup(id: "unavailable", title: "Unavailable Devices", kind: .physicalDevice, destinations: filteredUnavailablePhysicalDevices)
+        ]
+        .filter { !$0.destinations.isEmpty }
     }
 
     private func destinationSymbol(for kind: DestinationKind) -> String {
@@ -1061,9 +1230,53 @@ struct ContentView: View {
     }
 
     private var filteredUnavailablePhysicalDevices: [Destination] {
-        model.filteredDestinations.filter {
+        visibleDestinations.filter {
             $0.kind == .physicalDevice && !$0.isConnected
         }
+    }
+
+    private var destinationEmptyDescription: String {
+        if destinationScope == .favorites && favoriteDestinationIDs.isEmpty {
+            return "Favorite a device with its star button to keep it in this quick view."
+        }
+        if !model.destinationSearchQuery.isEmpty {
+            return "No device matches “\(model.destinationSearchQuery)” and the active filters."
+        }
+        return "No destinations match the active OS, device type, favorites, or readiness filters."
+    }
+
+    private func destinationOSLabel(_ destination: Destination) -> String {
+        guard let version = destination.osVersion, !version.isEmpty else {
+            return destination.platform
+        }
+        return "\(destination.platform) \(version)"
+    }
+
+    private func toggleDestinationOS(_ os: String) {
+        if selectedDestinationOS.contains(os) {
+            selectedDestinationOS.remove(os)
+        } else {
+            selectedDestinationOS.insert(os)
+        }
+    }
+
+    private func clearDestinationFilters(includeSearch: Bool) {
+        destinationScope = .all
+        selectedDestinationOS.removeAll()
+        readyDestinationsOnly = false
+        if includeSearch {
+            model.setDestinationSearchQuery("")
+        }
+    }
+
+    private func setDestinationFavorite(_ destinationID: String, isFavorite: Bool) {
+        var favorites = favoriteDestinationIDs
+        if isFavorite {
+            favorites.insert(destinationID)
+        } else {
+            favorites.remove(destinationID)
+        }
+        favoriteDestinationStorage = favorites.sorted().joined(separator: "\n")
     }
 
     private func warningLooksLikeToolFailure(_ warning: String) -> Bool {
@@ -1380,82 +1593,98 @@ private struct AppIconArtwork: View {
 private struct DestinationRow: View {
     let destination: Destination
     let isSelected: Bool
+    let isFavorite: Bool
     let setSelected: (Bool) -> Void
+    let setFavorite: (Bool) -> Void
     @State private var isHovering = false
 
     var body: some View {
-        Button {
-            setSelected(!isSelected)
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(isSelected ? XerTheme.action : Color.secondary)
-                    .frame(width: 20)
+        HStack(spacing: 4) {
+            Button {
+                setSelected(!isSelected)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(isSelected ? XerTheme.action : Color.secondary)
+                        .frame(width: 20)
 
-                Image(systemName: destinationIcon)
-                    .foregroundStyle(Color.secondary)
-                    .font(.system(size: 19, weight: .regular))
-                    .frame(width: 24)
+                    Image(systemName: destinationIcon)
+                        .foregroundStyle(Color.secondary)
+                        .font(.system(size: 19, weight: .regular))
+                        .frame(width: 24)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(destination.name)
-                            .font(.callout.weight(.medium))
-                        Circle()
-                            .fill(destination.isReadyForDevelopment ? Color.green : Color.orange)
-                            .frame(width: 6, height: 6)
-                        if !destination.isReadyForDevelopment {
-                            Text("Unavailable")
-                                .font(.caption2.weight(.medium))
-                                .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(destination.name)
+                                .font(.callout.weight(.medium))
+                            Circle()
+                                .fill(destination.isReadyForDevelopment ? Color.green : Color.orange)
+                                .frame(width: 6, height: 6)
+                            if !destination.isReadyForDevelopment {
+                                Text("Unavailable")
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(.orange)
+                            }
                         }
-                    }
-                    Text(destination.subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                Spacer()
-                if destination.kind == .physicalDevice,
-                   let modelName = destination.modelName,
-                   !modelName.localizedCaseInsensitiveContains(destination.name) {
-                    Text(modelName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                if let batteryLevel = destination.batteryLevel {
-                    HStack(spacing: 4) {
-                        Text("\(batteryLevel)%")
+                        Text(destination.subtitle)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Image(systemName: batterySymbol(for: batteryLevel))
-                            .foregroundStyle(batteryLevel <= 20 ? Color.orange : Color.green)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    Spacer()
+                    if destination.kind == .physicalDevice,
+                       let modelName = destination.modelName,
+                       !modelName.localizedCaseInsensitiveContains(destination.name) {
+                        Text(modelName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    if let batteryLevel = destination.batteryLevel {
+                        HStack(spacing: 4) {
+                            Text("\(batteryLevel)%")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Image(systemName: batterySymbol(for: batteryLevel))
+                                .foregroundStyle(batteryLevel <= 20 ? Color.orange : Color.green)
+                        }
                     }
                 }
+                .contentShape(Rectangle())
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .contentShape(Rectangle())
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                isSelected
-                    ? XerTheme.action.opacity(0.15)
-                    : (isHovering ? Color.primary.opacity(0.045) : Color.clear),
-                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-            )
+            .buttonStyle(.plain)
+            .disabled(!destination.isReadyForDevelopment)
+            .accessibilityLabel("\(destination.name), \(destination.kind.displayName), \(destination.isReadyForDevelopment ? "ready" : "unavailable")")
+            .accessibilityHint(destination.isReadyForDevelopment ? "Select this build destination" : "Reconnect, pair, or enable Developer Mode before selecting")
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
+
+            Button {
+                setFavorite(!isFavorite)
+            } label: {
+                Image(systemName: isFavorite ? "star.fill" : "star")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(isFavorite ? Color.orange : Color.secondary)
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .help(isFavorite ? "Remove from favorites" : "Add to favorites")
+            .accessibilityLabel(isFavorite ? "Remove \(destination.name) from favorites" : "Add \(destination.name) to favorites")
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            isSelected
+                ? XerTheme.action.opacity(0.15)
+                : (isHovering ? Color.primary.opacity(0.045) : Color.clear),
+            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+        )
         .onHover { isHovering = $0 }
-        .disabled(!destination.isReadyForDevelopment)
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .help(destination.udid)
-        .accessibilityLabel("\(destination.name), \(destination.kind.displayName), \(destination.isReadyForDevelopment ? "ready" : "unavailable")")
-        .accessibilityHint(destination.isReadyForDevelopment ? "Select this build destination" : "Reconnect, pair, or enable Developer Mode before selecting")
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private func batterySymbol(for level: Int) -> String {
@@ -1480,49 +1709,71 @@ private struct DestinationRow: View {
 private struct DestinationGridCard: View {
     let destination: Destination
     let isSelected: Bool
+    let isFavorite: Bool
     let setSelected: (Bool) -> Void
+    let setFavorite: (Bool) -> Void
 
     var body: some View {
-        Button {
-            setSelected(!isSelected)
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: destinationIcon)
-                    .font(.system(size: 23))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(destination.name)
-                        .font(.callout.weight(.medium))
-                        .lineLimit(1)
-                    Text(destination.subtitle)
-                        .font(.caption)
+        ZStack(alignment: .topTrailing) {
+            Button {
+                setSelected(!isSelected)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: destinationIcon)
+                        .font(.system(size: 23))
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Label(
-                        destination.isReadyForDevelopment ? "Ready" : "Unavailable",
-                        systemImage: destination.isReadyForDevelopment ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
-                    )
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(destination.isReadyForDevelopment ? Color.green : Color.orange)
+                        .frame(width: 28)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(destination.name)
+                            .font(.callout.weight(.medium))
+                            .lineLimit(1)
+                        Text(destination.subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Label(
+                            destination.isReadyForDevelopment ? "Ready" : "Unavailable",
+                            systemImage: destination.isReadyForDevelopment ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                        )
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(destination.isReadyForDevelopment ? Color.green : Color.orange)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                        .foregroundStyle(isSelected ? XerTheme.action : Color.secondary)
+                        .padding(.top, 22)
                 }
-                Spacer(minLength: 4)
-                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                    .foregroundStyle(isSelected ? XerTheme.action : Color.secondary)
+                .padding(10)
+                .padding(.trailing, 18)
+                .frame(maxWidth: .infinity, minHeight: 70, alignment: .leading)
+                .background(
+                    isSelected ? XerTheme.action.opacity(0.10) : Color(nsColor: .controlBackgroundColor),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(isSelected ? XerTheme.action.opacity(0.45) : Color(nsColor: .separatorColor))
+                }
             }
-            .padding(10)
-            .frame(maxWidth: .infinity, minHeight: 70, alignment: .leading)
-            .background(
-                isSelected ? XerTheme.action.opacity(0.10) : Color(nsColor: .controlBackgroundColor),
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(isSelected ? XerTheme.action.opacity(0.45) : Color(nsColor: .separatorColor))
+            .buttonStyle(.plain)
+            .disabled(!destination.isReadyForDevelopment)
+            .accessibilityLabel("\(destination.name), \(destination.kind.displayName), \(destination.isReadyForDevelopment ? "ready" : "unavailable")")
+            .accessibilityHint(destination.isReadyForDevelopment ? "Select this build destination" : "Reconnect, pair, or enable Developer Mode before selecting")
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
+
+            Button {
+                setFavorite(!isFavorite)
+            } label: {
+                Image(systemName: isFavorite ? "star.fill" : "star")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(isFavorite ? Color.orange : Color.secondary)
+                    .frame(width: 24, height: 24)
             }
+            .buttonStyle(.plain)
+            .padding(6)
+            .help(isFavorite ? "Remove from favorites" : "Add to favorites")
+            .accessibilityLabel(isFavorite ? "Remove \(destination.name) from favorites" : "Add \(destination.name) to favorites")
         }
-        .buttonStyle(.plain)
-        .disabled(!destination.isReadyForDevelopment)
         .help(destination.udid)
     }
 
@@ -1558,42 +1809,80 @@ private struct OperationStatus: View {
     let isBusy: Bool
 
     var body: some View {
-        HStack(spacing: 9) {
-            if isBusy {
-                ProgressView(value: progress?.completed, total: progress?.total ?? 1)
-                    .progressViewStyle(.circular)
-                    .controlSize(.small)
+        HStack(spacing: 6) {
+            if isBusy && state != .running {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(statusColor)
+                    .frame(width: 12, height: 12)
                     .accessibilityLabel(state.title)
             } else {
                 Image(systemName: statusSymbol)
+                    .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(statusColor)
+                    .frame(width: 12, height: 12)
                     .accessibilityHidden(true)
             }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(state.title)
-                    .font(.callout.weight(.medium))
-                if let progress {
-                    Text("\(Int(progress.completed)) of \(Int(progress.total)) destinations")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+
+            Text(phaseTitle)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+
+            if let progress {
+                Divider()
+                    .frame(height: 11)
+
+                Text("\(progress.completed)/\(progress.total)")
+                    .font(.caption.monospacedDigit().weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
         }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(statusColor.opacity(backgroundOpacity), in: Capsule())
+        .overlay {
+            Capsule()
+                .strokeBorder(statusColor.opacity(borderOpacity), lineWidth: 0.75)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .help(state.title)
         .accessibilityElement(children: .combine)
+        .accessibilityLabel(state.title)
     }
 
-    private var progress: (completed: Double, total: Double)? {
+    private var progress: (completed: Int, total: Int)? {
         switch state {
-        case let .building(completed, total), let .deploying(completed, total):
-            return (Double(completed), Double(max(total, 1)))
+        case let .building(completed, total), let .installing(completed, total):
+            return (completed, max(total, 1))
         default:
             return nil
         }
     }
 
+    private var phaseTitle: String {
+        switch state {
+        case .idle: "Ready"
+        case .importing: "Importing"
+        case .refreshingDestinations: "Refreshing destinations"
+        case .refreshingSchemes: "Refreshing schemes"
+        case .preparingBuild: "Constructing build description"
+        case .building: "Building"
+        case .installing: "Installing"
+        case .launching: "Launching"
+        case .running: "Running"
+        case .cancelling: "Cancelling"
+        case .succeeded: "Completed"
+        case .failed: "Failed"
+        case .cancelled: "Cancelled"
+        }
+    }
+
     private var statusSymbol: String {
         switch state {
+        case .idle: "checkmark"
         case .succeeded: "checkmark.circle.fill"
+        case .running: "circle.fill"
         case .failed: "xmark.octagon.fill"
         case .cancelled: "stop.circle.fill"
         default: "circle.fill"
@@ -1602,10 +1891,26 @@ private struct OperationStatus: View {
 
     private var statusColor: Color {
         switch state {
-        case .succeeded: .green
+        case .idle: .secondary
+        case .succeeded, .running: .green
         case .failed: .red
         case .cancelled: .orange
-        default: .secondary
+        default: XerTheme.action
+        }
+    }
+
+    private var backgroundOpacity: Double {
+        switch state {
+        case .idle: 0.06
+        case .failed, .cancelled, .succeeded, .running: 0.10
+        default: 0.09
+        }
+    }
+
+    private var borderOpacity: Double {
+        switch state {
+        case .idle: 0.16
+        default: 0.22
         }
     }
 }
@@ -1681,4 +1986,98 @@ private enum DestinationLayout: String, CaseIterable, Identifiable {
     case grid
 
     var id: String { rawValue }
+}
+
+private struct DestinationPresentationGroup {
+    let id: String
+    let title: String
+    let kind: DestinationKind
+    let destinations: [Destination]
+}
+
+private enum DestinationScope: String, CaseIterable, Identifiable {
+    case all
+    case favorites
+    case mac
+    case physical
+    case simulators
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: "All"
+        case .favorites: "Favorites"
+        case .mac: "Mac"
+        case .physical: "Physical"
+        case .simulators: "Simulators"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .all: "square.grid.2x2"
+        case .favorites: "star"
+        case .mac: "desktopcomputer"
+        case .physical: "iphone"
+        case .simulators: "iphone.gen3"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .all: "Show all destinations"
+        case .favorites: "Show favorite destinations"
+        case .mac: "Show Mac destinations"
+        case .physical: "Show physical devices"
+        case .simulators: "Show simulators"
+        }
+    }
+}
+
+private struct DestinationScopeChipStyle: ButtonStyle {
+    let isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .labelStyle(.titleAndIcon)
+            .foregroundStyle(isSelected ? Color.white : Color.primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                isSelected ? XerTheme.action : Color(nsColor: .controlBackgroundColor),
+                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+            )
+            .overlay {
+                if !isSelected {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 0.75)
+                }
+            }
+            .opacity(configuration.isPressed ? 0.72 : 1)
+    }
+}
+
+private struct DestinationFilterToken: View {
+    let title: String
+    let remove: () -> Void
+
+    var body: some View {
+        Button(action: remove) {
+            HStack(spacing: 4) {
+                Text(title)
+                    .lineLimit(1)
+                Image(systemName: "xmark")
+                    .font(.system(size: 7, weight: .bold))
+            }
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(XerTheme.action)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(XerTheme.action.opacity(0.09), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help("Remove \(title) filter")
+        .accessibilityLabel("Remove \(title) filter")
+    }
 }

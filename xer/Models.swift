@@ -272,9 +272,11 @@ enum AppOperationState: Equatable, Sendable {
     case importing
     case refreshingDestinations
     case refreshingSchemes
+    case preparingBuild
     case building(completed: Int, total: Int)
-    case deploying(completed: Int, total: Int)
-    case streaming
+    case installing(completed: Int, total: Int)
+    case launching
+    case running
     case cancelling
     case succeeded
     case failed(String)
@@ -290,12 +292,16 @@ enum AppOperationState: Equatable, Sendable {
             return "Refreshing destinations…"
         case .refreshingSchemes:
             return "Refreshing schemes…"
+        case .preparingBuild:
+            return "Constructing build description…"
         case let .building(completed, total):
             return "Building \(completed)/\(total)…"
-        case let .deploying(completed, total):
-            return "Installing and launching \(completed)/\(total)…"
-        case .streaming:
-            return "Console streaming…"
+        case let .installing(completed, total):
+            return "Installing \(completed)/\(total)…"
+        case .launching:
+            return "Launching…"
+        case .running:
+            return "Running"
         case .cancelling:
             return "Cancelling…"
         case .succeeded:
