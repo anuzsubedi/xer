@@ -1,0 +1,26 @@
+{
+  "devices": {
+    "com.apple.CoreSimulator.SimRuntime.iOS-26-5": [
+      {
+        "state": "Shutdown",
+        "isAvailable": true,
+        "name": "iPhone Fixture",
+        "udid": "11111111-1111-1111-1111-111111111111"
+      },
+      {
+        "state": "Booted",
+        "isAvailable": false,
+        "name": "Unavailable Fixture",
+        "udid": "22222222-2222-2222-2222-222222222222"
+      }
+    ],
+    "com.apple.CoreSimulator.SimRuntime.tvOS-26-5": [
+      {
+        "state": "Booted",
+        "isAvailable": true,
+        "name": "Apple TV Fixture",
+        "udid": "33333333-3333-3333-3333-333333333333"
+      }
+    ]
+  }
+}

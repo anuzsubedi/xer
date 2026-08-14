@@ -1,0 +1,59 @@
+{
+  "info": {
+    "jsonVersion": 4,
+    "outcome": "success"
+  },
+  "result": {
+    "devices": [
+      {
+        "identifier": "CORE-DEVICE-PHYSICAL",
+        "deviceProperties": {
+          "name": "Fixture iPhone",
+          "osVersionNumber": "26.5",
+          "developerModeStatus": "enabled"
+        },
+        "hardwareProperties": {
+          "platform": "iOS",
+          "reality": "physical",
+          "udid": "00008101-0000000000000001"
+        },
+        "connectionProperties": {
+          "pairingState": "paired",
+          "tunnelState": "connected"
+        }
+      },
+      {
+        "identifier": "CORE-DEVICE-SIMULATED",
+        "deviceProperties": {
+          "name": "Fixture Simulator",
+          "provider": "com.apple.CoreSimulator.SimulatorCoreDevicePlugin",
+          "osVersionNumber": "26.5"
+        },
+        "hardwareProperties": {
+          "platform": "iOS",
+          "reality": "simulated",
+          "udid": "44444444-4444-4444-4444-444444444444"
+        },
+        "connectionProperties": {
+          "tunnelState": "connected"
+        }
+      },
+      {
+        "identifier": "CORE-DEVICE-OFFLINE",
+        "deviceProperties": {
+          "name": "Offline Fixture",
+          "developerModeStatus": "disabled"
+        },
+        "hardwareProperties": {
+          "platform": "iOS",
+          "reality": "physical",
+          "udid": "00008101-0000000000000002"
+        },
+        "connectionProperties": {
+          "pairingState": "unpaired",
+          "tunnelState": "disconnected"
+        }
+      }
+    ]
+  }
+}

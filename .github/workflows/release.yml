@@ -1,0 +1,112 @@
+name: Release xer
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing semantic-version tag to release
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: xer-release
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: [self-hosted, macOS, ARM64, xer-release]
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="$RELEASE_TAG"
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git fetch origin main --quiet
+          git rev-parse --verify "refs/tags/$TAG" >/dev/null
+          TAG_COMMIT="$(git rev-list -n 1 "$TAG")"
+          [[ "$(git rev-parse HEAD)" == "$TAG_COMMIT" ]]
+          git merge-base --is-ancestor "$TAG_COMMIT" origin/main || {
+            echo "Release tags must point to a commit contained in main." >&2
+            exit 1
+          }
+
+      - name: Check local release prerequisites
+        shell: bash
+        env:
+          NOTARY_PROFILE: xer-notary
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          command -v xcodebuild
+          command -v xcrun
+          command -v hdiutil
+          command -v gh
+          test -n "$SIGNING_IDENTITY"
+          security find-identity -v -p codesigning | grep -F "$SIGNING_IDENTITY"
+          xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null
+
+      - name: Build, sign, notarize, and package xer
+        shell: bash
+        env:
+          NOTARY_PROFILE: xer-notary
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: scripts/build-release.sh "$RELEASE_TAG" "$GITHUB_RUN_NUMBER"
+
+      - name: Create draft GitHub release and upload installers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          gh release create "$RELEASE_TAG" \
+            dist/xer.dmg \
+            dist/xer.app.zip \
+            dist/xer-dSYMs.zip \
+            dist/SHA256SUMS \
+            --draft \
+            --verify-tag \
+            --title "xer $VERSION" \
+            --notes "Signed and notarized macOS release."
+
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$RELEASE_TAG" --draft=false
+
+      - name: Remove draft release after a failed release
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' 2>/dev/null | grep -qx true; then
+            gh release delete "$RELEASE_TAG" --yes --cleanup-tag=false
+          fi
+
+      - name: Clean release workspace
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "$RUNNER_TEMP/xer-release-${GITHUB_RUN_ID}" "$GITHUB_WORKSPACE/dist"
