@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <g fill="none" stroke="#F7FAFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="112">
+    <path d="M274 274L750 750"/>
+    <path d="M750 274L274 750"/>
+  </g>
+  <g fill="#F7FAFF">
+    <rect x="206" y="206" width="136" height="136" rx="42"/>
+    <rect x="682" y="206" width="136" height="136" rx="42"/>
+    <rect x="206" y="682" width="136" height="136" rx="42"/>
+    <rect x="682" y="682" width="136" height="136" rx="42"/>
+  </g>
+  <g fill="#3264E8">
+    <rect x="244" y="230" width="60" height="88" rx="18"/>
+    <rect x="720" y="230" width="60" height="88" rx="18"/>
+    <rect x="244" y="706" width="60" height="88" rx="18"/>
+    <rect x="720" y="706" width="60" height="88" rx="18"/>
+  </g>
+</svg>
