@@ -4,12 +4,10 @@ import Foundation
 /// Runs developer tools directly. Arguments are passed to Foundation.Process as
 /// an array; no shell is involved, so project paths and scheme names cannot
 /// become shell syntax accidentally.
-final class ProcessRunner: @unchecked Sendable {
+final class ProcessRunner: Sendable {
     typealias OutputHandler = @Sendable (ProcessOutput) -> Void
 
-    private let lock = NSLock()
-    private var activeProcesses: [UUID: Process] = [:]
-    private var cancelledProcesses: Set<UUID> = []
+    private let registry = ProcessRegistry()
 
     func run(
         executableURL: URL,
@@ -88,9 +86,7 @@ final class ProcessRunner: @unchecked Sendable {
                     )
                 }
 
-                self.lock.lock()
-                self.activeProcesses[token] = process
-                self.lock.unlock()
+                self.registry.register(process, token: token)
 
                 do {
                     try process.run()
@@ -111,33 +107,11 @@ final class ProcessRunner: @unchecked Sendable {
     }
 
     func cancelAll() {
-        lock.lock()
-        let tokens = Array(activeProcesses.keys)
-        lock.unlock()
-        tokens.forEach(cancel)
+        registry.cancelAll()
     }
 
     private func cancel(_ token: UUID) {
-        lock.lock()
-        guard let process = activeProcesses[token] else {
-            lock.unlock()
-            return
-        }
-        cancelledProcesses.insert(token)
-        lock.unlock()
-
-        guard process.isRunning else { return }
-        process.terminate()
-
-        // xcodebuild can leave helper processes behind while it unwinds. A
-        // delayed hard kill keeps cancellation deterministic without using a
-        // shell or killing unrelated processes.
-        let processIdentifier = process.processIdentifier
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
-            if process.isRunning {
-                _ = Darwin.kill(processIdentifier, SIGKILL)
-            }
-        }
+        registry.cancel(token)
     }
 
     private func finish(
@@ -146,16 +120,13 @@ final class ProcessRunner: @unchecked Sendable {
         accumulator: ProcessOutputAccumulator,
         continuation: CheckedContinuation<ProcessResult, Error>
     ) {
-        lock.lock()
-        let wasCancelled = cancelledProcesses.remove(token) != nil
-        let wasActive = activeProcesses.removeValue(forKey: token) != nil
-        lock.unlock()
+        let result = registry.finish(token)
 
         // A launch error may have already removed the token. This guard makes
         // termination-handler and launch-error races harmless.
-        guard wasActive else { return }
+        guard result.wasActive else { return }
 
-        if wasCancelled {
+        if result.wasCancelled {
             continuation.resume(throwing: CancellationError())
         } else {
             continuation.resume(returning: ProcessResult(
@@ -167,10 +138,7 @@ final class ProcessRunner: @unchecked Sendable {
     }
 
     private func remove(_ token: UUID) {
-        lock.lock()
-        activeProcesses.removeValue(forKey: token)
-        cancelledProcesses.remove(token)
-        lock.unlock()
+        registry.remove(token)
     }
 
     /// Returns a shell-safe display string for logs only. The command is never
@@ -180,6 +148,63 @@ final class ProcessRunner: @unchecked Sendable {
             let escaped = argument.replacingOccurrences(of: "'", with: "'\\''")
             return "'\(escaped)'"
         }.joined(separator: " ")
+    }
+}
+
+/// The only unchecked concurrency boundary in process execution. Foundation's
+/// `Process` is not Sendable, so this registry confines every shared access
+/// behind one lock while `ProcessRunner` itself remains safely Sendable.
+private final class ProcessRegistry: @unchecked Sendable {
+    private let lock = NSLock()
+    private var activeProcesses: [UUID: Process] = [:]
+    private var cancelledProcesses: Set<UUID> = []
+
+    func register(_ process: Process, token: UUID) {
+        lock.lock()
+        activeProcesses[token] = process
+        lock.unlock()
+    }
+
+    func cancelAll() {
+        lock.lock()
+        let tokens = Array(activeProcesses.keys)
+        lock.unlock()
+        tokens.forEach(cancel)
+    }
+
+    func cancel(_ token: UUID) {
+        lock.lock()
+        guard let process = activeProcesses[token] else {
+            lock.unlock()
+            return
+        }
+        cancelledProcesses.insert(token)
+        lock.unlock()
+
+        guard process.isRunning else { return }
+        process.terminate()
+
+        let processIdentifier = process.processIdentifier
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
+            if process.isRunning {
+                _ = Darwin.kill(processIdentifier, SIGKILL)
+            }
+        }
+    }
+
+    func finish(_ token: UUID) -> (wasActive: Bool, wasCancelled: Bool) {
+        lock.lock()
+        let wasCancelled = cancelledProcesses.remove(token) != nil
+        let wasActive = activeProcesses.removeValue(forKey: token) != nil
+        lock.unlock()
+        return (wasActive, wasCancelled)
+    }
+
+    func remove(_ token: UUID) {
+        lock.lock()
+        activeProcesses.removeValue(forKey: token)
+        cancelledProcesses.remove(token)
+        lock.unlock()
     }
 }
 
