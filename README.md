@@ -70,12 +70,24 @@ xer does not route developer-tool commands through a shell. Paths, schemes, and 
 
 ```text
 xer/
-├── AppIcon.icon/       # Layered application icon
-├── Tests/              # XCTest and tooling fixtures
-├── xer/                # Swift application source
-├── xer.xcodeproj/      # Xcode project and shared schemes
-├── DESIGN.md           # Interface design system
-└── PRODUCT.md          # Product principles and constraints
+├── AppIcon.icon/           # Layered release application icon
+├── DebugAppIcon.icon/      # Layered debug application icon
+├── Tests/                  # XCTest and tooling fixtures
+├── docs/                   # Documentation assets and benchmarks
+├── scripts/                # Project utility scripts
+├── xer/                    # Swift application source
+│   ├── Application/        # App state, stores, and build coordination
+│   ├── DeveloperTools/     # Xcode, device, simulator, and deployment clients
+│   ├── Models/             # Projects, destinations, artifacts, and operations
+│   ├── Persistence/        # Security-scoped bookmark persistence
+│   ├── Projects/           # Project and icon discovery
+│   ├── Views/              # Feature-organized SwiftUI views
+│   ├── AppModel.swift      # Root observable application model
+│   ├── ContentView.swift   # Root application view
+│   └── ProcessRunner.swift # Process execution and lifecycle management
+├── xer.xcodeproj/          # Xcode project and shared schemes
+├── DESIGN.md               # Interface design system
+└── PRODUCT.md              # Product principles and constraints
 ```
 
 ## Contributing
