@@ -9,8 +9,8 @@ import SwiftUI
 
 private enum XerTheme {
     static let action = Color(red: 0.196, green: 0.392, blue: 0.910)
-    static let workspace = Color(nsColor: .windowBackgroundColor)
-    static let inspector = Color(nsColor: .textBackgroundColor)
+    static var workspace: Color { Color(nsColor: .windowBackgroundColor) }
+    static var inspector: Color { Color(nsColor: .textBackgroundColor) }
 }
 
 private enum SidebarRemovalCandidate: Identifiable {
@@ -55,6 +55,7 @@ private struct SidebarProjectGroup: Identifiable {
 struct ContentView: View {
     @StateObject private var model = AppModel()
     @EnvironmentObject private var updateManager: UpdateManager
+    @Environment(\.colorScheme) private var colorScheme
     @State private var trustCandidateID: String?
     @State private var projectQuery = ""
     @State private var logQuery = ""
@@ -81,30 +82,6 @@ struct ContentView: View {
         }
         .tint(XerTheme.action)
         .frame(minWidth: 760, minHeight: 560)
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    model.refreshDestinations()
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .keyboardShortcut("r", modifiers: [.command, .shift])
-                .disabled(model.isBusy)
-
-                if model.isBusy {
-                    Button {
-                        model.cancelCurrentOperation()
-                    } label: {
-                        Label("Stop", systemImage: "stop.fill")
-                    }
-                    .keyboardShortcut(".", modifiers: [.command])
-                    .help("Stop the current build, install, launch, or console stream (⌘.)")
-                    .accessibilityLabel("Stop current operation")
-                }
-
-                OperationStatus(state: model.operationState, isBusy: model.isBusy)
-            }
-        }
         .onKeyPress(characters: CharacterSet(charactersIn: "f"), phases: .down) { press in
             guard press.modifiers.contains(.command) else { return .ignored }
             if press.modifiers.contains(.option) {
@@ -121,21 +98,19 @@ struct ContentView: View {
             }
             updateManager.checkForUpdatesInBackground()
         }
-        .alert(
-            "Operation Issue",
+        .sheet(
             isPresented: Binding(
                 get: { model.lastErrorMessage != nil },
                 set: { isPresented in
-                    guard !isPresented else { return }
-                    DispatchQueue.main.async {
-                        model.clearError()
-                    }
+                    if !isPresented { model.clearError() }
                 }
             )
         ) {
-            Button("Dismiss") { model.clearError() }
-        } message: {
-            Text(model.lastErrorMessage ?? "The operation could not be completed.")
+            if let message = model.lastErrorMessage {
+                OperationIssueSheet(message: message) {
+                    model.clearError()
+                }
+            }
         }
         .confirmationDialog(
             "Trust imported project?",
@@ -583,11 +558,16 @@ struct ContentView: View {
                     destinationSectionHeading
                     Spacer()
                     destinationSelectionStatus
+                    destinationDeviceActions
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
                     destinationSectionHeading
-                    destinationSelectionStatus
+                    HStack {
+                        destinationSelectionStatus
+                        Spacer()
+                        destinationDeviceActions
+                    }
                 }
             }
 
@@ -695,6 +675,27 @@ struct ContentView: View {
                 .font(.callout.weight(.medium))
                 .foregroundStyle(model.selectedDestinations.isEmpty ? .secondary : XerTheme.action)
         }
+    }
+
+    private var destinationDeviceActions: some View {
+        ControlGroup {
+            Button {
+                model.openDeviceManager()
+            } label: {
+                Label("Manage Devices", systemImage: "iphone.gen3")
+            }
+            .help("Open Xcode to manage devices and simulators")
+
+            Button {
+                model.refreshDestinations()
+            } label: {
+                Label("Refresh Devices", systemImage: "arrow.clockwise")
+            }
+            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .disabled(model.isBusy)
+            .help("Refresh This Mac, simulators, and connected physical devices (⇧⌘R)")
+        }
+        .controlSize(.small)
     }
 
     private func destinationFilterBar(compact: Bool) -> some View {
@@ -1068,43 +1069,46 @@ struct ContentView: View {
         }
         .labelsHidden()
         .pickerStyle(.menu)
+        // AppKit's menu-backed picker can retain its initial appearance when
+        // macOS changes themes while the app is open. Recreate only this
+        // control so its label, arrows, and background resolve correctly.
+        .id(colorScheme)
         .accessibilityLabel("Filter activity")
     }
 
     private var commandBar: some View {
         HStack(spacing: 12) {
-            Button("Manage Devices…") {
-                model.openDeviceManager()
-            }
-            .buttonStyle(.bordered)
-            .help("Open Xcode to manage devices and simulators")
-
             Spacer()
 
-            if model.isBusy {
-                Button {
-                    model.cancelCurrentOperation()
-                } label: {
-                    Label("Stop", systemImage: "stop.fill")
-                }
-                .buttonStyle(.bordered)
-                .tint(.red)
-                .keyboardShortcut(".", modifiers: [.command])
-                .help("Cancel the current operation (⌘.)")
-            } else {
-                Button {
-                    model.buildInstallAndLaunchSelected()
-                } label: {
-                    Label("Run", systemImage: "play.fill")
-                        .frame(minWidth: 88)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .keyboardShortcut(.return, modifiers: [.command])
-                .disabled(!model.canBuildAndDeploy)
-                .help("Build, install, and launch on selected destinations (⌘Return)")
-                .accessibilityLabel("Build, install, and launch on \(model.selectedDestinations.count) selected destinations")
+            OperationStatus(state: model.operationState, isBusy: model.isBusy)
+
+            Button {
+                model.runOrRestart()
+            } label: {
+                Label("Run", systemImage: "play.fill")
+                    .frame(minWidth: 88)
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .keyboardShortcut(.return, modifiers: [.command])
+            .disabled(!model.canRunOrRestart)
+            .help(model.isAppActive
+                ? "Rebuild, install, and relaunch on selected destinations (⌘Return)"
+                : "Build, install, and launch on selected destinations (⌘Return)")
+            .accessibilityLabel(model.isAppActive
+                ? "Rebuild, install, and relaunch on selected destinations"
+                : "Build, install, and launch on selected destinations")
+
+            Button {
+                model.cancelCurrentOperation()
+            } label: {
+                Label("Stop", systemImage: "stop.fill")
+            }
+            .buttonStyle(.bordered)
+            .tint(.red)
+            .keyboardShortcut(".", modifiers: [.command])
+            .disabled(!model.canStop)
+            .help(model.canStop ? "Cancel the current operation (⌘.)" : "Nothing is currently running")
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
@@ -1624,11 +1628,6 @@ private struct DestinationRow: View {
                 setSelected(!isSelected)
             } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(isSelected ? XerTheme.action : Color.secondary)
-                        .frame(width: 20)
-
                     Image(systemName: destinationIcon)
                         .foregroundStyle(Color.secondary)
                         .font(.system(size: 19, weight: .regular))
@@ -1759,15 +1758,12 @@ private struct DestinationGridCard: View {
                         .foregroundStyle(destination.isReadyForDevelopment ? Color.green : Color.orange)
                     }
                     Spacer(minLength: 4)
-                    Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                        .foregroundStyle(isSelected ? XerTheme.action : Color.secondary)
-                        .padding(.top, 22)
                 }
                 .padding(10)
                 .padding(.trailing, 18)
                 .frame(maxWidth: .infinity, minHeight: 70, alignment: .leading)
                 .background(
-                    isSelected ? XerTheme.action.opacity(0.10) : Color(nsColor: .controlBackgroundColor),
+                    isSelected ? XerTheme.action.opacity(0.16) : Color(nsColor: .controlBackgroundColor),
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                 )
                 .overlay {
@@ -1932,6 +1928,90 @@ private struct OperationStatus: View {
         case .idle: 0.16
         default: 0.22
         }
+    }
+}
+
+private struct OperationIssueSheet: View {
+    let message: String
+    let dismiss: () -> Void
+
+    private var messageParts: (summary: String, details: String?) {
+        let parts = message.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
+        let summary = parts.first.map(String.init) ?? "The operation could not be completed."
+        let details = parts.count > 1 ? String(parts[1]) : nil
+        return (summary, details)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "xmark.octagon.fill")
+                    .font(.title2)
+                    .foregroundStyle(.red)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Operation Failed")
+                        .font(.title2.weight(.semibold))
+                    Text("Review the summary and technical details below.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(20)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Summary")
+                            .font(.headline)
+                        Text(messageParts.summary)
+                            .font(.body)
+                            .textSelection(.enabled)
+                    }
+
+                    if let details = messageParts.details {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Technical Details")
+                                .font(.headline)
+                            Text(details)
+                                .font(.system(.callout, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                                .background(
+                                    Color(nsColor: .textBackgroundColor),
+                                    in: RoundedRectangle(cornerRadius: 8)
+                                )
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                                }
+                        }
+                    }
+                }
+                .padding(20)
+            }
+
+            Divider()
+
+            HStack {
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(message, forType: .string)
+                } label: {
+                    Label("Copy Error", systemImage: "doc.on.doc")
+                }
+
+                Spacer()
+
+                Button("Done", action: dismiss)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(16)
+        }
+        .frame(minWidth: 640, idealWidth: 720, minHeight: 440, idealHeight: 560)
     }
 }
 
