@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- A compact amber corner ribbon keeps the debug build unmistakable at small sizes. -->
+  <path d="M708-24H1048V316L886 478L546 138Z" fill="#F6B73C"/>
+  <path d="M716 8H1016V308L882 442L582 142Z" fill="#FFD766" opacity="0.38"/>
+  <text x="822" y="155" fill="#14285F" font-family="SF Pro Display, Helvetica Neue, sans-serif" font-size="74" font-weight="800" letter-spacing="2" text-anchor="middle" transform="rotate(45 822 155)">DEBUG</text>
+</svg>

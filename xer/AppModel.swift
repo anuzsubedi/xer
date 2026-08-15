@@ -33,6 +33,7 @@ final class AppModel: ObservableObject {
     private var projectScopes: [String: SecurityScopeAccess] = [:]
     private var parentScope: SecurityScopeAccess?
     private var operationTask: Task<Void, Never>?
+    private var restartTask: Task<Void, Never>?
     private var projectIconTask: Task<Void, Never>?
     private var latestBuildArtifacts: [String: BuildArtifact] = [:]
     private var hasRestored = false
@@ -47,7 +48,24 @@ final class AppModel: ObservableObject {
         self.bookmarkStore = bookmarkStore
     }
 
-    var isBusy: Bool { operationTask != nil }
+    var isBusy: Bool { operationTask != nil || restartTask != nil }
+    var canStop: Bool { isBusy }
+    var isAppActive: Bool {
+        guard operationTask != nil else { return false }
+        return operationState == .launching || operationState == .running
+    }
+
+    var canRunOrRestart: Bool {
+        guard let project = selectedProject,
+              project.isTrusted,
+              let scheme = selectedSchemeName,
+              !scheme.isEmpty,
+              !selectedDestinations.isEmpty,
+              restartTask == nil else {
+            return false
+        }
+        return operationTask == nil || isAppActive
+    }
 
     var selectedProject: ImportedProject? {
         guard let selectedProjectID else { return projects.first }
@@ -227,6 +245,33 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             await self.performDestinationRefresh()
             self.operationTask = nil
+        }
+    }
+
+    func runOrRestart() {
+        guard canRunOrRestart else { return }
+        guard operationTask != nil else {
+            buildInstallAndLaunchSelected()
+            return
+        }
+
+        appendLog(.command, "Run requested while the app is active. Stopping it before rebuilding, installing, and relaunching.")
+        operationTask?.cancel()
+        tooling.cancelAll()
+
+        restartTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                while self.operationTask != nil {
+                    try await Task.sleep(for: .milliseconds(50))
+                }
+            } catch {
+                self.restartTask = nil
+                return
+            }
+
+            self.restartTask = nil
+            self.buildInstallAndLaunchSelected()
         }
     }
 
@@ -540,10 +585,11 @@ final class AppModel: ObservableObject {
     }
 
     func cancelCurrentOperation() {
-        guard let operationTask else { return }
+        guard operationTask != nil || restartTask != nil else { return }
         operationState = .cancelling
         appendLog(.warning, "Cancellation requested. Stopping active developer tools…")
-        operationTask.cancel()
+        operationTask?.cancel()
+        restartTask?.cancel()
         tooling.cancelAll()
     }
 
@@ -1017,6 +1063,12 @@ final class AppModel: ObservableObject {
                         }
                     }
                 }
+
+                // Console-attached launch commands can remain silent for the
+                // entire app session. Reaching this point means every launch
+                // has been dispatched, so do not wait for app stdout before
+                // reflecting that the app is running.
+                operationState = .running
 
                 var outcomes: [LaunchOutcome] = []
                 for await outcome in group {
