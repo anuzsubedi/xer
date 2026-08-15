@@ -54,6 +54,7 @@ private struct SidebarProjectGroup: Identifiable {
 
 struct ContentView: View {
     @StateObject private var model = AppModel()
+    @EnvironmentObject private var updateManager: UpdateManager
     @State private var trustCandidateID: String?
     @State private var projectQuery = ""
     @State private var logQuery = ""
@@ -118,6 +119,7 @@ struct ContentView: View {
             if model.destinations.isEmpty {
                 model.refreshDestinations()
             }
+            updateManager.checkForUpdatesInBackground()
         }
         .alert(
             "Operation Issue",
@@ -310,6 +312,24 @@ struct ContentView: View {
                 .accessibilityLabel("Remove project")
 
                 sidebarSearchField
+
+                Button {
+                    updateManager.showUpdateCheck()
+                } label: {
+                    Image(systemName: updateManager.updateAvailable ? "arrow.down.circle.fill" : "arrow.down.circle")
+                        .foregroundStyle(updateManager.updateAvailable ? XerTheme.action : .secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(updateManager.updateAvailable ? "Update available" : "Check for updates")
+                .accessibilityLabel(updateManager.updateAvailable ? "Update available" : "Check for updates")
+                .overlay(alignment: .topTrailing) {
+                    if updateManager.updateAvailable {
+                        Circle()
+                            .fill(.red)
+                            .frame(width: 6, height: 6)
+                            .offset(x: 2, y: -2)
+                    }
+                }
             }
             .buttonStyle(.borderless)
             .padding(.horizontal, 14)

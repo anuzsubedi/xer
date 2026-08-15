@@ -20,6 +20,7 @@ concurrency:
 
 env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  SPARKLE_VERSION: 2.9.4
 
 jobs:
   release:
@@ -106,6 +107,75 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release edit "$RELEASE_TAG" --draft=false
+
+      - name: Check Sparkle publishing prerequisites
+        shell: bash
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          XER_WEB_REPO_TOKEN: ${{ secrets.XER_WEB_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$SPARKLE_PRIVATE_KEY" || {
+            echo "SPARKLE_PRIVATE_KEY secret is required." >&2
+            exit 1
+          }
+          test -n "$XER_WEB_REPO_TOKEN" || {
+            echo "XER_WEB_REPO_TOKEN secret is required." >&2
+            exit 1
+          }
+
+      - name: Check out the update feed repository
+        uses: actions/checkout@v4
+        with:
+          repository: anuzsubedi/xer-web
+          token: ${{ secrets.XER_WEB_REPO_TOKEN }}
+          ref: main
+          path: xer-web-update-feed
+
+      - name: Generate signed Sparkle appcast
+        shell: bash
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          TOOL_ROOT="$RUNNER_TEMP/sparkle-$SPARKLE_VERSION"
+          ARCHIVE="$RUNNER_TEMP/Sparkle-$SPARKLE_VERSION.tar.xz"
+          UPDATES="$RUNNER_TEMP/xer-sparkle-updates"
+          mkdir -p "$UPDATES"
+
+          curl --fail --silent --show-error --location \
+            "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VERSION/Sparkle-$SPARKLE_VERSION.tar.xz" \
+            --output "$ARCHIVE"
+          mkdir -p "$TOOL_ROOT"
+          tar -xJf "$ARCHIVE" -C "$TOOL_ROOT"
+
+          cp xer-web-update-feed/public/appcast.xml "$UPDATES/appcast.xml"
+          cp dist/xer.app.zip "$UPDATES/xer.app.zip"
+
+          printf '%s\n' "$SPARKLE_PRIVATE_KEY" | \
+            "$TOOL_ROOT/bin/generate_appcast" \
+              --ed-key-file - \
+              --download-url-prefix "https://github.com/anuzsubedi/xer/releases/download/$RELEASE_TAG/" \
+              "$UPDATES"
+
+          test -s "$UPDATES/appcast.xml"
+          grep -q 'sparkle:edSignature=' "$UPDATES/appcast.xml"
+          cp "$UPDATES/appcast.xml" xer-web-update-feed/public/appcast.xml
+
+      - name: Publish signed Sparkle appcast
+        shell: bash
+        working-directory: xer-web-update-feed
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/appcast.xml
+          if git diff --cached --quiet; then
+            echo "Appcast is already current."
+            exit 0
+          fi
+          git commit -m "chore: publish xer $RELEASE_TAG update feed"
+          git push origin HEAD:main
 
       - name: Remove draft release after a failed release
         if: failure()
