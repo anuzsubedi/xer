@@ -20,7 +20,7 @@ concurrency:
 
 env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-  SPARKLE_VERSION: 2.9.4
+  SPARKLE_VERSION: 2.9.5
 
 jobs:
   release:
@@ -55,13 +55,18 @@ jobs:
         env:
           NOTARY_PROFILE: xer-notary
           SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          XER_WEB_REPO_TOKEN: ${{ secrets.XER_WEB_REPO_TOKEN }}
         run: |
           set -euo pipefail
           command -v xcodebuild
           command -v xcrun
           command -v hdiutil
           command -v gh
+          command -v plutil
           test -n "$SIGNING_IDENTITY"
+          test -n "$SPARKLE_PRIVATE_KEY"
+          test -n "$XER_WEB_REPO_TOKEN"
           security find-identity -v -p codesigning | grep -F "$SIGNING_IDENTITY"
           xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null
 
@@ -102,28 +107,6 @@ jobs:
               --notes "Signed and notarized macOS release."
           fi
 
-      - name: Publish GitHub release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release edit "$RELEASE_TAG" --draft=false
-
-      - name: Check Sparkle publishing prerequisites
-        shell: bash
-        env:
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-          XER_WEB_REPO_TOKEN: ${{ secrets.XER_WEB_REPO_TOKEN }}
-        run: |
-          set -euo pipefail
-          test -n "$SPARKLE_PRIVATE_KEY" || {
-            echo "SPARKLE_PRIVATE_KEY secret is required." >&2
-            exit 1
-          }
-          test -n "$XER_WEB_REPO_TOKEN" || {
-            echo "XER_WEB_REPO_TOKEN secret is required." >&2
-            exit 1
-          }
-
       - name: Check out the update feed repository
         uses: actions/checkout@v4
         with:
@@ -161,6 +144,12 @@ jobs:
           test -s "$UPDATES/appcast.xml"
           grep -q 'sparkle:edSignature=' "$UPDATES/appcast.xml"
           cp "$UPDATES/appcast.xml" xer-web-update-feed/public/appcast.xml
+
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$RELEASE_TAG" --draft=false
 
       - name: Publish signed Sparkle appcast
         shell: bash

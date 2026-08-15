@@ -17,9 +17,37 @@ NOTARY_PROFILE="${NOTARY_PROFILE:-xer-notary}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK_ROOT="${RUNNER_TEMP:-$ROOT/.build}/xer-release-${GITHUB_RUN_ID:-local}"
 ARCHIVE="$WORK_ROOT/xer.xcarchive"
+EXPORT_OPTIONS="$WORK_ROOT/ExportOptions.plist"
+EXPORT_DIR="$WORK_ROOT/export"
 STAGE="$WORK_ROOT/dmg-root"
 DIST="$ROOT/dist"
-APP="$ARCHIVE/Products/Applications/xer.app"
+APP="$EXPORT_DIR/xer.app"
+
+notarize() {
+  local artifact="$1"
+  local label="$2"
+  local result_file="$WORK_ROOT/notary-$label.json"
+  local submission_id=""
+  local submit_status=0
+
+  set +e
+  xcrun notarytool submit "$artifact" \
+    --keychain-profile "$NOTARY_PROFILE" \
+    --wait \
+    --output-format json | tee "$result_file"
+  submit_status=${PIPESTATUS[0]}
+  set -e
+
+  if [[ $submit_status -ne 0 ]]; then
+    submission_id="$(/usr/bin/plutil -extract id raw -o - "$result_file" 2>/dev/null || true)"
+    if [[ -n "$submission_id" ]]; then
+      echo "Notarization failed. Fetching Apple log for $submission_id…" >&2
+      xcrun notarytool log "$submission_id" \
+        --keychain-profile "$NOTARY_PROFILE" || true
+    fi
+    return "$submit_status"
+  fi
+}
 
 cleanup() {
   if [[ -n "${MOUNT_POINT:-}" && -d "$MOUNT_POINT" ]]; then
@@ -48,6 +76,19 @@ xcodebuild archive \
   OTHER_CODE_SIGN_FLAGS="--timestamp" \
   clean archive
 
+/usr/bin/plutil -create xml1 "$EXPORT_OPTIONS"
+/usr/bin/plutil -insert destination -string export "$EXPORT_OPTIONS"
+/usr/bin/plutil -insert method -string developer-id "$EXPORT_OPTIONS"
+/usr/bin/plutil -insert signingCertificate -string "$IDENTITY" "$EXPORT_OPTIONS"
+/usr/bin/plutil -insert signingStyle -string manual "$EXPORT_OPTIONS"
+/usr/bin/plutil -insert teamID -string "$TEAM" "$EXPORT_OPTIONS"
+
+echo "Exporting the archive for Developer ID distribution…"
+xcodebuild -exportArchive \
+  -archivePath "$ARCHIVE" \
+  -exportPath "$EXPORT_DIR" \
+  -exportOptionsPlist "$EXPORT_OPTIONS"
+
 test -d "$APP"
 
 codesign --verify --deep --strict --verbose=2 "$APP"
@@ -56,9 +97,7 @@ grep -qw arm64 <<<"$APP_ARCHS"
 grep -qw x86_64 <<<"$APP_ARCHS"
 
 ditto -c -k --keepParent --sequesterRsrc "$APP" "$WORK_ROOT/xer-notary.zip"
-xcrun notarytool submit "$WORK_ROOT/xer-notary.zip" \
-  --keychain-profile "$NOTARY_PROFILE" \
-  --wait
+notarize "$WORK_ROOT/xer-notary.zip" app
 xcrun stapler staple "$APP"
 xcrun stapler validate "$APP"
 spctl --assess --type execute --verbose=4 "$APP"
@@ -77,9 +116,7 @@ hdiutil create \
 
 codesign --force --timestamp --sign "$IDENTITY" "$DIST/xer.dmg"
 codesign --verify --verbose=2 "$DIST/xer.dmg"
-xcrun notarytool submit "$DIST/xer.dmg" \
-  --keychain-profile "$NOTARY_PROFILE" \
-  --wait
+notarize "$DIST/xer.dmg" dmg
 xcrun stapler staple "$DIST/xer.dmg"
 xcrun stapler validate "$DIST/xer.dmg"
 hdiutil verify "$DIST/xer.dmg"
