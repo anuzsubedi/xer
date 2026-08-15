@@ -1,271 +1,7 @@
 import AppKit
 import Foundation
 
-/// The app is deliberately not sandboxed so it can invoke Xcode's developer
-/// tools and build imported projects. Keep this check for bookmark/scoped-access
-/// compatibility when the target is embedded in a separately sandboxed build.
-enum AppSandbox {
-    static var isEnabled: Bool {
-        ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
-    }
-}
-
-/// Keeps a security-scoped URL alive for as long as an imported project is in
-/// use. This is a no-op for the normal unsandboxed xer target, but makes the
-/// persistence layer safe if the target is ever run in a sandboxed host.
-final class SecurityScopeAccess: @unchecked Sendable {
-    let url: URL
-    let didStartAccessing: Bool
-
-    init(url: URL) {
-        self.url = url
-        didStartAccessing = AppSandbox.isEnabled && url.startAccessingSecurityScopedResource()
-    }
-
-    deinit {
-        if didStartAccessing {
-            url.stopAccessingSecurityScopedResource()
-        }
-    }
-}
-
-/// Persists paths for every build and security-scoped bookmarks when sandboxed.
-/// A path fallback is intentional: xer is a developer utility with App Sandbox
-/// disabled, and path persistence should still work after a restart. Bookmarks
-/// are only requested in a sandboxed process, where they are meaningful.
-final class BookmarkStore: @unchecked Sendable {
-    private let defaults: UserDefaults
-    private let parentBookmarkKey = "xer.parentFolderBookmark"
-    private let parentPathKey = "xer.parentFolderPath"
-    private let projectsKey = "xer.importedProjects"
-
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-    }
-
-    @discardableResult
-    func saveParentFolder(_ url: URL) -> Bool {
-        let normalizedURL = url.standardizedFileURL
-        defaults.set(normalizedURL.path, forKey: parentPathKey)
-
-        guard AppSandbox.isEnabled else {
-            defaults.removeObject(forKey: parentBookmarkKey)
-            return true
-        }
-
-        guard let data = makeBookmark(for: normalizedURL) else {
-            return false
-        }
-        defaults.set(data, forKey: parentBookmarkKey)
-        return true
-    }
-
-    func resolveParentFolder() -> URL? {
-        if let data = defaults.data(forKey: parentBookmarkKey),
-           let resolved = resolveBookmark(data),
-           isDirectory(resolved) {
-            return resolved.standardizedFileURL
-        }
-
-        guard let path = defaults.string(forKey: parentPathKey) else { return nil }
-        let fallback = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
-        return isDirectory(fallback) ? fallback : nil
-    }
-
-    func removeParentFolder(matching path: String) {
-        let normalizedPath = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
-        guard let storedPath = defaults.string(forKey: parentPathKey),
-              URL(fileURLWithPath: storedPath, isDirectory: true).standardizedFileURL.path == normalizedPath else {
-            return
-        }
-        defaults.removeObject(forKey: parentPathKey)
-        defaults.removeObject(forKey: parentBookmarkKey)
-    }
-
-    @discardableResult
-    func saveProject(_ project: ImportedProject) -> Bool {
-        var records = loadStoredProjects()
-        let normalizedPath = project.url.standardizedFileURL.path
-        let oldRecord = records.first { $0.path == normalizedPath || $0.path == project.path }
-        let bookmarkData = makeBookmark(for: project.url)
-            ?? oldRecord?.bookmarkData
-
-        let record = StoredProject(
-            path: normalizedPath,
-            kind: project.kind,
-            schemes: project.schemes,
-            isTrusted: project.isTrusted,
-            parentPath: project.parentPath,
-            bookmarkData: bookmarkData
-        )
-        records.removeAll { $0.path == project.path || $0.path == normalizedPath }
-        records.append(record)
-        let didSave = saveStoredProjects(records)
-        return didSave && (!AppSandbox.isEnabled || bookmarkData != nil)
-    }
-
-    func removeProjects(notIn paths: Set<String>) {
-        let normalizedPaths = Set(paths.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
-        let records = loadStoredProjects().filter { normalizedPaths.contains($0.path) }
-        _ = saveStoredProjects(records)
-    }
-
-    func storedProjects() -> [StoredProject] {
-        loadStoredProjects()
-    }
-
-    func resolveProject(_ record: StoredProject) -> URL? {
-        if let bookmarkData = record.bookmarkData,
-           let resolved = resolveBookmark(bookmarkData),
-           isDirectory(resolved) {
-            return resolved.standardizedFileURL
-        }
-
-        let fallback = URL(fileURLWithPath: record.path, isDirectory: true).standardizedFileURL
-        return isDirectory(fallback) ? fallback : nil
-    }
-
-    private func makeBookmark(for url: URL) -> Data? {
-        guard AppSandbox.isEnabled else { return nil }
-        return try? url.bookmarkData(
-            options: [.withSecurityScope],
-            includingResourceValuesForKeys: nil,
-            relativeTo: nil
-        )
-    }
-
-    private func resolveBookmark(_ data: Data) -> URL? {
-        var isStale = false
-        guard let url = try? URL(
-            resolvingBookmarkData: data,
-            options: [.withSecurityScope, .withoutUI],
-            relativeTo: nil,
-            bookmarkDataIsStale: &isStale
-        ) else {
-            return nil
-        }
-        // A stale bookmark can still resolve to the right URL. The path fallback
-        // remains available, and a subsequent save can replace the bookmark.
-        return url
-    }
-
-    private func isDirectory(_ url: URL) -> Bool {
-        guard FileManager.default.fileExists(atPath: url.path) else { return false }
-        return (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
-    }
-
-    private func loadStoredProjects() -> [StoredProject] {
-        guard let data = defaults.data(forKey: projectsKey),
-              let records = try? JSONDecoder().decode([StoredProject].self, from: data) else {
-            return []
-        }
-
-        var unique: [String: StoredProject] = [:]
-        for record in records {
-            let normalizedPath = URL(fileURLWithPath: record.path, isDirectory: true)
-                .standardizedFileURL.path
-            unique[normalizedPath] = StoredProject(
-                path: normalizedPath,
-                kind: record.kind,
-                schemes: record.schemes,
-                isTrusted: record.isTrusted,
-                parentPath: record.parentPath,
-                bookmarkData: record.bookmarkData
-            )
-        }
-        return unique.values.sorted {
-            $0.path.localizedStandardCompare($1.path) == .orderedAscending
-        }
-    }
-
-    @discardableResult
-    private func saveStoredProjects(_ records: [StoredProject]) -> Bool {
-        guard let data = try? JSONEncoder().encode(records) else { return false }
-        defaults.set(data, forKey: projectsKey)
-        return true
-    }
-}
-
-struct DiscoveredProject: Sendable, Hashable {
-    let url: URL
-    let kind: ProjectKind
-}
-
-struct ProjectDiscovery: Sendable {
-    func discover(in parentURL: URL) -> [DiscoveredProject] {
-        let fileManager = FileManager.default
-        let normalizedParent = parentURL.standardizedFileURL
-
-        if let parentKind = kind(of: normalizedParent) {
-            return [DiscoveredProject(url: normalizedParent, kind: parentKind)]
-        }
-
-        guard (try? normalizedParent.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true,
-              let enumerator = fileManager.enumerator(
-                  at: normalizedParent,
-                  includingPropertiesForKeys: [.isDirectoryKey, .isPackageKey],
-                  options: [.skipsHiddenFiles, .skipsPackageDescendants]
-              ) else {
-            return []
-        }
-
-        var found: [DiscoveredProject] = []
-        var seenPaths = Set<String>()
-        for case let url as URL in enumerator {
-            guard let projectKind = kind(of: url) else { continue }
-            let normalizedURL = url.standardizedFileURL
-            guard seenPaths.insert(normalizedURL.path).inserted else { continue }
-            found.append(DiscoveredProject(url: normalizedURL, kind: projectKind))
-        }
-
-        return found.sorted {
-            $0.url.path.localizedStandardCompare($1.url.path) == .orderedAscending
-        }
-    }
-
-    func kind(of url: URL) -> ProjectKind? {
-        guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
-            return nil
-        }
-
-        switch url.pathExtension.lowercased() {
-        case ProjectKind.workspace.fileExtension:
-            return .workspace
-        case ProjectKind.project.fileExtension:
-            return .project
-        default:
-            return nil
-        }
-    }
-
-    /// Reads shared scheme filenames only. Importing an untrusted project must
-    /// not invoke xcodebuild or execute package plugins/build phases.
-    func sharedSchemes(in projectURL: URL) -> [SharedScheme] {
-        let schemesURL = projectURL
-            .appendingPathComponent("xcshareddata", isDirectory: true)
-            .appendingPathComponent("xcschemes", isDirectory: true)
-
-        guard let files = try? FileManager.default.contentsOfDirectory(
-            at: schemesURL,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return []
-        }
-
-        var names = Set<String>()
-        for file in files where file.pathExtension.caseInsensitiveCompare("xcscheme") == .orderedSame {
-            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
-                continue
-            }
-            let name = file.deletingPathExtension().lastPathComponent
-            if !name.isEmpty { names.insert(name) }
-        }
-
-        return names
-            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-            .map(SharedScheme.init(name:))
-    }
+extension ProjectDiscovery {
 
     /// Finds the best source image in an app icon asset set near an imported
     /// project. This only reads asset-catalog metadata and image bytes; it does
@@ -324,7 +60,7 @@ struct ProjectDiscovery: Sendable {
         return nil
     }
 
-    private func configuredAppIconNames(near projectURL: URL) -> [String] {
+    func configuredAppIconNames(near projectURL: URL) -> [String] {
         let projectFiles: [URL]
         if projectURL.pathExtension.lowercased() == ProjectKind.project.fileExtension {
             projectFiles = [projectURL.appendingPathComponent("project.pbxproj")]
@@ -355,7 +91,7 @@ struct ProjectDiscovery: Sendable {
         return names
     }
 
-    private func appIcon(from appIconSetURL: URL) -> AppIcon? {
+    func appIcon(from appIconSetURL: URL) -> AppIcon? {
         let contentsURL = appIconSetURL.appendingPathComponent("Contents.json")
         guard let data = try? Data(contentsOf: contentsURL),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -388,7 +124,7 @@ struct ProjectDiscovery: Sendable {
     /// directory. Composite the visible default-appearance layers over the
     /// declared icon fill so the sidebar shows the complete app icon rather
     /// than one isolated source layer.
-    private func appIcon(fromIconComposer iconURL: URL) -> AppIcon? {
+    func appIcon(fromIconComposer iconURL: URL) -> AppIcon? {
         let metadataURL = iconURL.appendingPathComponent("icon.json")
         guard let data = try? Data(contentsOf: metadataURL),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -438,7 +174,7 @@ struct ProjectDiscovery: Sendable {
         return AppIcon(data: png)
     }
 
-    private func imageApplyingFill(to image: NSImage, fill: Any?, size: NSSize) -> NSImage {
+    func imageApplyingFill(to image: NSImage, fill: Any?, size: NSSize) -> NSImage {
         guard let dictionary = fill as? [String: Any],
               let encodedColor = dictionary["solid"] as? String,
               let color = iconColor(from: encodedColor) else {
@@ -458,7 +194,7 @@ struct ProjectDiscovery: Sendable {
         return result
     }
 
-    private func iconFillColor(from value: Any?) -> NSColor? {
+    func iconFillColor(from value: Any?) -> NSColor? {
         if let dictionary = value as? [String: Any] {
             if let solid = dictionary["solid"] as? String {
                 return iconColor(from: solid)
@@ -473,7 +209,7 @@ struct ProjectDiscovery: Sendable {
         return NSColor.clear
     }
 
-    private func drawIconFill(_ value: Any?, in rect: NSRect) {
+    func drawIconFill(_ value: Any?, in rect: NSRect) {
         if let dictionary = value as? [String: Any],
            let encodedGradient = dictionary["automatic-gradient"] as? String,
            let base = iconColor(from: encodedGradient) {
@@ -486,7 +222,7 @@ struct ProjectDiscovery: Sendable {
         NSBezierPath(rect: rect).fill()
     }
 
-    private func iconColor(from encoded: String) -> NSColor? {
+    func iconColor(from encoded: String) -> NSColor? {
         guard let separator = encoded.firstIndex(of: ":") else { return nil }
         let components = encoded[encoded.index(after: separator)...]
             .split(separator: ",")
@@ -504,7 +240,7 @@ struct ProjectDiscovery: Sendable {
         )
     }
 
-    private func isVisibleInDefaultAppearance(_ layer: [String: Any]) -> Bool {
+    func isVisibleInDefaultAppearance(_ layer: [String: Any]) -> Bool {
         if let opacity = layer["opacity"] as? NSNumber, opacity.doubleValue <= 0 {
             return false
         }
