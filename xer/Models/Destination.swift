@@ -169,6 +169,11 @@ struct Destination: Identifiable, Codable, Hashable, Sendable {
             .joined(separator: " ")
     }
 
+    func isCompatible(with schemeDestinations: [SchemeRunDestination]) -> Bool {
+        guard !schemeDestinations.isEmpty else { return true }
+        return schemeDestinations.contains { $0.matches(self) }
+    }
+
     private static var hostArchitecture: String {
 #if arch(arm64)
         "arm64"
@@ -177,5 +182,83 @@ struct Destination: Identifiable, Codable, Hashable, Sendable {
 #else
         "undefined_arch"
 #endif
+    }
+}
+
+struct SchemeRunDestination: Equatable, Sendable {
+    var platform: String
+    var architecture: String? = nil
+    var variant: String? = nil
+    var id: String? = nil
+    var osVersion: String? = nil
+    var name: String? = nil
+
+    var isPlaceholder: Bool {
+        let identity = (id ?? "").lowercased()
+        let title = (name ?? "").lowercased()
+        return identity.contains("placeholder")
+            || identity.contains("dvtdevice")
+            || title.hasPrefix("any ")
+    }
+
+    var isMacOS: Bool {
+        platform.lowercased().replacingOccurrences(of: " ", with: "") == "macos"
+    }
+
+    var isSimulator: Bool {
+        platform.localizedCaseInsensitiveContains("simulator")
+    }
+
+    func matches(_ destination: Destination) -> Bool {
+        switch destination.kind {
+        case .localMac:
+            return isMacOS
+        case .simulator:
+            guard isSimulator, Self.platformFamily(platform) == Self.platformFamily(destination.platform) else {
+                return false
+            }
+            if isPlaceholder { return true }
+            return id == destination.udid
+        case .physicalDevice:
+            guard !isMacOS, !isSimulator,
+                  Self.platformFamily(platform) == Self.platformFamily(destination.platform) else {
+                return false
+            }
+            if isPlaceholder { return true }
+            return id == destination.udid
+        }
+    }
+
+    private static func platformFamily(_ value: String) -> String {
+        value.lowercased()
+            .replacingOccurrences(of: "simulator", with: "")
+            .replacingOccurrences(of: " ", with: "")
+    }
+}
+
+enum SchemeDestinationSupport {
+    static func compatibleIDs(
+        in destinations: [Destination],
+        schemeDestinations: [SchemeRunDestination]
+    ) -> Set<String> {
+        Set(destinations.filter { $0.isCompatible(with: schemeDestinations) }.map(\.id))
+    }
+
+    static func prefersMobileDestinations(_ schemeDestinations: [SchemeRunDestination]) -> Bool {
+        schemeDestinations.contains { !$0.isMacOS }
+    }
+
+    static func summary(for schemeDestinations: [SchemeRunDestination]) -> String? {
+        let supportsMac = schemeDestinations.contains(where: \.isMacOS)
+        let supportsSimulator = schemeDestinations.contains(where: \.isSimulator)
+        let supportsPhysical = schemeDestinations.contains { !$0.isMacOS && !$0.isSimulator }
+        switch (supportsMac, supportsSimulator || supportsPhysical) {
+        case (true, false):
+            return "This scheme only supports Mac destinations. Simulators and iOS devices are hidden."
+        case (false, true):
+            return "This scheme does not support This Mac. Choose a simulator or connected device."
+        default:
+            return nil
+        }
     }
 }

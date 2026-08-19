@@ -5,4 +5,6 @@ struct DestinationStore {
     var warning: String?
     var searchQuery = ""
     var selectedIDs: Set<String> = []
+    var schemeCompatibleIDs: Set<String>?
+    var schemeDestinationNote: String?
 }

@@ -53,13 +53,33 @@ struct ProjectDiscovery: Sendable {
         }
     }
 
-    /// Reads shared scheme filenames only. Importing an untrusted project must
+    /// Reads scheme filenames from disk only. Importing an untrusted project must
     /// not invoke xcodebuild or execute package plugins/build phases.
     func sharedSchemes(in projectURL: URL) -> [SharedScheme] {
-        let schemesURL = projectURL
+        var names = schemeNames(in: projectURL
             .appendingPathComponent("xcshareddata", isDirectory: true)
-            .appendingPathComponent("xcschemes", isDirectory: true)
+            .appendingPathComponent("xcschemes", isDirectory: true))
 
+        let userdataURL = projectURL.appendingPathComponent("xcuserdata", isDirectory: true)
+        if let userDirectories = try? FileManager.default.contentsOfDirectory(
+            at: userdataURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for directory in userDirectories
+            where directory.pathExtension.caseInsensitiveCompare("xcuserdatad") == .orderedSame {
+                names.formUnion(
+                    schemeNames(in: directory.appendingPathComponent("xcschemes", isDirectory: true))
+                )
+            }
+        }
+
+        return names
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            .map(SharedScheme.init(name:))
+    }
+
+    private func schemeNames(in schemesURL: URL) -> Set<String> {
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: schemesURL,
             includingPropertiesForKeys: [.isRegularFileKey],
@@ -70,16 +90,14 @@ struct ProjectDiscovery: Sendable {
 
         var names = Set<String>()
         for file in files where file.pathExtension.caseInsensitiveCompare("xcscheme") == .orderedSame {
-            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+            if let isRegularFile = try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile,
+               isRegularFile == false {
                 continue
             }
             let name = file.deletingPathExtension().lastPathComponent
             if !name.isEmpty { names.insert(name) }
         }
-
         return names
-            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-            .map(SharedScheme.init(name:))
     }
 
 }

@@ -38,15 +38,20 @@ extension AppModel {
                 continue
             }
 
+            let diskSchemes = discovery.sharedSchemes(in: normalizedURL)
+            let schemes = mergedSchemes(diskSchemes, persisted: record.schemes)
             let project = ImportedProject(
                 path: normalizedURL.path,
                 kind: resolvedKind,
-                schemes: record.schemes,
+                schemes: schemes,
                 isTrusted: record.isTrusted,
                 parentPath: record.parentPath
             )
             restoredProjects.append(project)
             scopes[project.path] = scope
+            if schemes != record.schemes {
+                persistProject(project)
+            }
             if let scheme = project.schemes.first?.name {
                 selectedSchemeByProject[project.id] = scheme
             }
@@ -61,6 +66,7 @@ extension AppModel {
 
         if !projects.isEmpty {
             appendLog(.info, "Restored \(projects.count) persisted project record(s).")
+            Task { await loadSchemesForSelectedProjectIfNeeded() }
         }
     }
 
@@ -108,6 +114,8 @@ extension AppModel {
         projects[index] = project
         persistProject(project)
         appendLog(.info, "Trusted \(project.displayName). Build phases and signing configuration may now run when explicitly requested.")
+        reloadSchemesFromDisk(projectID: projectID)
+        Task { await loadSchemesForSelectedProjectIfNeeded() }
     }
 
     func revokeTrust(for projectID: String) {
@@ -124,6 +132,10 @@ extension AppModel {
         guard projectID == nil || projects.contains(where: { $0.id == projectID }) else { return }
         selectedProjectID = projectID
         latestBuildArtifacts.removeAll()
+        if let projectID {
+            reloadSchemesFromDisk(projectID: projectID)
+        }
+        Task { await loadSchemesForSelectedProjectIfNeeded() }
     }
 
     func removeProject(_ projectID: String) {
@@ -216,7 +228,10 @@ extension AppModel {
                 let path = item.url.standardizedFileURL.path
                 let previous = projects.first(where: { $0.path == path })
                 let stored = storedByPath[path]
-                let schemes = discoveredSchemes[path] ?? []
+                let schemes = mergedSchemes(
+                    discoveredSchemes[path] ?? [],
+                    persisted: previous?.schemes ?? stored?.schemes ?? []
+                )
                 let project = ImportedProject(
                     path: path,
                     kind: item.kind,
@@ -229,9 +244,9 @@ extension AppModel {
                 imported.append(project)
 
                 if schemes.isEmpty {
-                    appendLog(.warning, "\(project.displayName) has no scheme files in xcshareddata/xcschemes. Trust it and use Refresh Schemes for xcodebuild's canonical list.")
+                    appendLog(.warning, "\(project.displayName) has no scheme files on disk. Trust it so xer can load Xcode’s scheme list.")
                 } else {
-                    appendLog(.info, "Discovered \(schemes.count) shared scheme(s) in \(project.displayName) without executing project build phases.")
+                    appendLog(.info, "Discovered \(schemes.count) scheme(s) in \(project.displayName) without executing project build phases.")
                 }
             }
 
@@ -276,12 +291,75 @@ extension AppModel {
             )
             appendLog(.info, "Imported \(imported.count) project container(s) from \(parentURL.path). Trust is required per project before xcodebuild operations.")
             operationState = .succeeded
+            await loadSchemesForSelectedProjectIfNeeded()
         } catch is CancellationError {
             operationState = .cancelled
             appendLog(.warning, "Import cancelled.")
         } catch {
             presentOperationFailure(UserFacingError.describe(error))
         }
+    }
+
+    func reloadSchemesFromDisk(projectID: String) {
+        guard let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
+        let project = projects[index]
+        let merged = mergedSchemes(
+            discovery.sharedSchemes(in: project.url),
+            persisted: project.schemes
+        )
+        guard merged != project.schemes else { return }
+        updateProjectSchemes(projectID: projectID, schemes: merged)
+        if merged.isEmpty {
+            appendLog(.warning, "\(project.displayName) still has no scheme files on disk.")
+        } else {
+            appendLog(.info, "Loaded \(merged.count) scheme(s) for \(project.displayName) from disk.")
+        }
+    }
+
+    func loadSchemesForSelectedProjectIfNeeded() async {
+        guard let project = selectedProject else {
+            schemeCompatibleDestinationIDs = nil
+            schemeDestinationNote = nil
+            return
+        }
+
+        reloadSchemesFromDisk(projectID: project.id)
+        if project.isTrusted, selectedProject?.schemes.isEmpty == true, !isBusy {
+            await refreshSchemesFromXcodebuild()
+        }
+        await refreshSchemeCompatibleDestinations()
+    }
+
+    func refreshSchemesFromXcodebuild(presentFailures: Bool = false) async {
+        guard let project = selectedProject, project.isTrusted else { return }
+        do {
+            appendLog(.command, "Loading schemes for \(project.displayName) with xcodebuild.")
+            let handler = outputHandler(label: "schemes \(project.displayName)")
+            let schemes = try await tooling.listSchemes(for: project, outputHandler: handler)
+            updateProjectSchemes(projectID: project.id, schemes: schemes)
+            if schemes.isEmpty {
+                appendLog(.warning, "No schemes were returned for \(project.displayName).")
+            } else {
+                appendLog(.info, "Found \(schemes.count) scheme(s) for \(project.displayName).")
+            }
+        } catch is CancellationError {
+            appendLog(.warning, "Scheme refresh cancelled.")
+        } catch {
+            let message = UserFacingError.describe(error)
+            if presentFailures {
+                presentOperationFailure(message)
+            } else {
+                appendLog(.warning, "Could not load schemes for \(project.displayName): \(message)")
+            }
+        }
+    }
+
+    func mergedSchemes(_ disk: [SharedScheme], persisted: [SharedScheme]) -> [SharedScheme] {
+        var names = Set(disk.map(\.name))
+        names.formUnion(persisted.map(\.name))
+        return names
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            .map(SharedScheme.init(name:))
     }
 
     func updateProjectSchemes(projectID: String, schemes: [SharedScheme]) {

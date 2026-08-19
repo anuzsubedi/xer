@@ -40,27 +40,14 @@ extension AppModel {
 
         lastIssue = nil
         operationState = .refreshingSchemes
-        appendLog(.command, "Refreshing shared schemes for \(project.displayName) with xcodebuild.")
         appendLog(.command, commandDescription(DeveloperTooling.schemeListArguments(for: project)))
-        let handler = outputHandler(label: "schemes \(project.displayName)")
 
         operationTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            do {
-                let schemes = try await self.tooling.listSchemes(for: project, outputHandler: handler)
-                self.updateProjectSchemes(projectID: project.id, schemes: schemes)
-                if schemes.isEmpty {
-                    self.appendLog(.warning, "No shared schemes were returned for \(project.displayName).")
-                } else {
-                    self.appendLog(.info, "Found \(schemes.count) shared scheme(s) for \(project.displayName).")
-                }
+            await self.refreshSchemesFromXcodebuild(presentFailures: true)
+            await self.refreshSchemeCompatibleDestinations()
+            if self.operationState == .refreshingSchemes {
                 self.operationState = .succeeded
-            } catch is CancellationError {
-                self.operationState = .cancelled
-                self.appendLog(.warning, "Scheme refresh cancelled.")
-            } catch {
-                let message = UserFacingError.describe(error)
-                self.presentOperationFailure(message)
             }
             self.operationTask = nil
         }
@@ -75,6 +62,7 @@ extension AppModel {
         guard project.schemes.contains(where: { $0.name == schemeName }) else { return }
         selectedSchemeByProject[project.id] = schemeName
         latestBuildArtifacts.removeAll()
+        Task { await refreshSchemeCompatibleDestinations() }
     }
 
     func selectBuildConfiguration(_ configuration: String) {
@@ -84,15 +72,23 @@ extension AppModel {
     }
 
     func buildSelected() {
-        guard let context = validatedBuildContext() else { return }
+        guard !isBusy else { return }
         lastIssue = nil
         installedApps.removeAll()
         latestBuildArtifacts.removeAll()
         operationState = .preparingBuild
-        appendLog(.command, "Building \(context.scheme) for \(context.destinations.count) destination(s).")
 
         operationTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            await self.refreshSchemeCompatibleDestinations()
+            guard let context = self.validatedBuildContext(requireIdle: false) else {
+                if self.operationState == .preparingBuild {
+                    self.operationState = .idle
+                }
+                self.operationTask = nil
+                return
+            }
+            self.appendLog(.command, "Building \(context.scheme) for \(context.destinations.count) destination(s).")
             let outcomes = await self.performBuildPhase(
                 project: context.project,
                 scheme: context.scheme,
@@ -186,7 +182,7 @@ extension AppModel {
         }
         let destinations = selectedDestinations
         guard !destinations.isEmpty else {
-            presentError("Select at least one simulator or connected device.")
+            presentError("Select This Mac, a simulator, or a connected device that this scheme can run on.")
             return
         }
 
@@ -197,28 +193,37 @@ extension AppModel {
         let shouldAttachConsole = openConsoleForOutput
         let shouldIncludeUnifiedLogs = includeUnifiedLogs
         operationState = .preparingBuild
-        appendLog(.command, "Starting bounded build/deploy for \(destinations.count) destination(s), max concurrency \(Self.maxConcurrentDestinationOperations).")
-        for destination in destinations {
-            let derivedDataURL = AppPaths.derivedDataURL(
-                projectPath: project.path,
-                scheme: scheme,
-                destinationID: destination.id
-            )
-            appendLog(.command, commandDescription(DeveloperTooling.buildArguments(
-                for: project,
-                scheme: scheme,
-                configuration: configuration,
-                destination: destination,
-                derivedDataURL: derivedDataURL
-            )))
-        }
+        appendLog(.command, "Starting bounded build/deploy, max concurrency \(Self.maxConcurrentDestinationOperations).")
 
         operationTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            await self.refreshSchemeCompatibleDestinations()
+            guard let context = self.validatedBuildContext(requireIdle: false) else {
+                if self.operationState == .preparingBuild {
+                    self.operationState = .idle
+                }
+                self.operationTask = nil
+                return
+            }
+            self.appendLog(.command, "Using \(context.destinations.count) destination(s) compatible with \(context.scheme).")
+            for destination in context.destinations {
+                let derivedDataURL = AppPaths.derivedDataURL(
+                    projectPath: context.project.path,
+                    scheme: context.scheme,
+                    destinationID: destination.id
+                )
+                self.appendLog(.command, self.commandDescription(DeveloperTooling.buildArguments(
+                    for: context.project,
+                    scheme: context.scheme,
+                    configuration: configuration,
+                    destination: destination,
+                    derivedDataURL: derivedDataURL
+                )))
+            }
             await self.performBuildAndDeploy(
-                project: project,
-                scheme: scheme,
-                destinations: destinations,
+                project: context.project,
+                scheme: context.scheme,
+                destinations: context.destinations,
                 configuration: configuration,
                 cleanBuildFolder: shouldCleanBuildFolder,
                 attachConsole: shouldAttachConsole || shouldIncludeUnifiedLogs,
@@ -235,8 +240,8 @@ extension AppModel {
         operationController.cancel(using: tooling)
     }
 
-    func validatedBuildContext() -> BuildContext? {
-        guard !isBusy else { return nil }
+    func validatedBuildContext(requireIdle: Bool = true) -> BuildContext? {
+        guard !requireIdle || !isBusy else { return nil }
         guard let project = selectedProject else {
             presentError("Import a project before building.")
             return nil
@@ -249,9 +254,9 @@ extension AppModel {
             presentError("Select a shared scheme before building.")
             return nil
         }
-        let destinations = selectedDestinations
+        let destinations = selectedDestinations.filter(isCompatibleWithSelectedScheme)
         guard !destinations.isEmpty else {
-            presentError("Select at least one simulator or connected device.")
+            presentError("Select This Mac, a simulator, or a connected device that this scheme can run on.")
             return nil
         }
         return BuildContext(

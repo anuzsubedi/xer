@@ -21,6 +21,17 @@ extension DeveloperTooling {
             .map(SharedScheme.init(name:))
     }
 
+    func listSchemeRunDestinations(
+        for project: ImportedProject,
+        scheme: String,
+        outputHandler: ProcessRunner.OutputHandler? = nil
+    ) async throws -> [SchemeRunDestination] {
+        let arguments = Self.showDestinationsArguments(for: project, scheme: scheme)
+        let result = try await invoke(arguments, outputHandler: outputHandler)
+        try check(result, arguments: arguments)
+        return Self.schemeRunDestinations(in: result.combinedOutput)
+    }
+
     func build(
         project: ImportedProject,
         scheme: String,
