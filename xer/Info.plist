@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>SUFeedURL</key>
+	<string>https://xer.anuz.dev/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>y8nrK9+q2UP63mJ68Pg4NeWDLuaQl5mxCHxeJ+3l4To=</string>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
+</dict>
+</plist>

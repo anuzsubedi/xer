@@ -357,11 +357,8 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = xer/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_SUAutomaticallyUpdate = NO;
-				INFOPLIST_KEY_SUEnableAutomaticChecks = NO;
-				INFOPLIST_KEY_SUFeedURL = "https://xer.anuz.dev/appcast.xml";
-				INFOPLIST_KEY_SUPublicEDKey = "y8nrK9+q2UP63mJ68Pg4NeWDLuaQl5mxCHxeJ+3l4To=";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -391,11 +388,8 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = xer/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_SUAutomaticallyUpdate = NO;
-				INFOPLIST_KEY_SUEnableAutomaticChecks = NO;
-				INFOPLIST_KEY_SUFeedURL = "https://xer.anuz.dev/appcast.xml";
-				INFOPLIST_KEY_SUPublicEDKey = "y8nrK9+q2UP63mJ68Pg4NeWDLuaQl5mxCHxeJ+3l4To=";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -422,6 +416,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = xer/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@loader_path/../Frameworks",
@@ -446,6 +441,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = xer/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@loader_path/../Frameworks",
