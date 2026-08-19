@@ -145,6 +145,7 @@ jobs:
 
           cp xer-web-update-feed/public/appcast.xml "$UPDATES/appcast.xml"
           cp dist/xer.app.zip "$UPDATES/xer.app.zip"
+          gh api -X POST /markdown -f text="$(cat dist/release-notes.md)" > "$UPDATES/xer.app.html"
 
           printf '%s\n' "$SPARKLE_PRIVATE_KEY" | \
             "$TOOL_ROOT/bin/generate_appcast" \
@@ -154,6 +155,7 @@ jobs:
 
           test -s "$UPDATES/appcast.xml"
           grep -q 'sparkle:edSignature=' "$UPDATES/appcast.xml"
+          grep -q '<description>' "$UPDATES/appcast.xml"
           cp "$UPDATES/appcast.xml" xer-web-update-feed/public/appcast.xml
 
       - name: Publish GitHub release
