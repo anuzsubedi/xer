@@ -6,6 +6,12 @@ extension DeveloperTooling {
         ["xcodebuild", "-list", "-json"] + containerArguments(for: project)
     }
 
+    static func showDestinationsArguments(for project: ImportedProject, scheme: String) -> [String] {
+        ["xcodebuild"]
+            + containerArguments(for: project)
+            + ["-scheme", scheme, "-showdestinations"]
+    }
+
     static func simulatorListArguments() -> [String] {
         ["simctl", "list", "devices", "available", "--json"]
     }

@@ -25,6 +25,37 @@ extension DeveloperTooling {
         return try? JSONSerialization.jsonObject(with: Data(candidate.utf8))
     }
 
+    static func schemeRunDestinations(in text: String) -> [SchemeRunDestination] {
+        text.split(whereSeparator: \.isNewline).compactMap { line in
+            schemeRunDestination(in: String(line))
+        }
+    }
+
+    static func schemeRunDestination(in line: String) -> SchemeRunDestination? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("{"), trimmed.hasSuffix("}") else { return nil }
+        let inner = trimmed.dropFirst().dropLast()
+        var fields: [String: String] = [:]
+        for part in inner.split(separator: ",") {
+            let piece = part.trimmingCharacters(in: .whitespaces)
+            guard let colon = piece.firstIndex(of: ":") else { continue }
+            let key = piece[..<colon].trimmingCharacters(in: .whitespaces)
+            let value = piece[piece.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            if !key.isEmpty {
+                fields[key] = value
+            }
+        }
+        guard let platform = fields["platform"], !platform.isEmpty else { return nil }
+        return SchemeRunDestination(
+            platform: platform,
+            architecture: fields["arch"],
+            variant: fields["variant"],
+            id: fields["id"],
+            osVersion: fields["OS"],
+            name: fields["name"]
+        )
+    }
+
     static func schemeNames(in object: Any) -> [String] {
         var names = Set<String>()
 

@@ -93,6 +93,13 @@ struct ToolingFixtureCheck {
         expect(displayed.contains("'/tmp/Folder With Spaces/My App.xcodeproj'"), "command display should quote paths")
         expect(displayed.contains("'$(not-shell-expanded)'"), "command display should not expose shell expansion")
 
+        let macOnly = DeveloperTooling.schemeRunDestinations(in: """
+        { platform:macOS, arch:arm64, id:00008142-000E69EC3A22401C, name:My Mac }
+        { platform:macOS, name:Any Mac }
+        """)
+        expect(Destination.localMac.isCompatible(with: macOnly), "macOS-only schemes must accept This Mac")
+        expect(!destination.isCompatible(with: macOnly), "macOS-only schemes must reject iOS simulators")
+
         try testProjectDiscoveryAndPersistence()
         let processResult = try await ProcessRunner().run(
             executableURL: URL(fileURLWithPath: "/usr/bin/printf"),

@@ -186,9 +186,16 @@ extension ContentView {
                     .disabled(model.isBusy)
                 }
             } else if project.schemes.isEmpty {
-                Label("No shared scheme was found. Share a scheme in Xcode, then refresh.", systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                HStack(alignment: .top, spacing: 8) {
+                    Label("No scheme was found on disk. xer will load Xcode’s scheme list for this trusted project.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Spacer(minLength: 8)
+                    Button("Load Schemes") {
+                        model.refreshSchemes()
+                    }
+                    .disabled(model.isBusy)
+                }
             }
         }
     }
@@ -218,7 +225,7 @@ extension ContentView {
     @ViewBuilder
     func routeScheme(_ project: ImportedProject) -> some View {
         if project.schemes.isEmpty {
-            Text("No shared schemes")
+            Text("No schemes")
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 12)
                 .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)

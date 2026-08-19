@@ -3,6 +3,64 @@ import XCTest
 @testable import xer
 
 final class XerToolingTests: XCTestCase {
+    func testSchemeDestinationCompatibilityFiltersMacOnlyProjects() {
+        let output = """
+        Available destinations for the "maill" scheme:
+        \t{ platform:macOS, arch:arm64, id:00008142-000E69EC3A22401C, name:My Mac }
+        \t{ platform:macOS, name:Any Mac }
+        """
+        let schemeDestinations = DeveloperTooling.schemeRunDestinations(in: output)
+        XCTAssertEqual(schemeDestinations.count, 2)
+
+        let mac = Destination.localMac
+        let simulator = Destination(
+            udid: "0B18E454-36FC-44F0-B134-1B4F59DA9CD5",
+            name: "iPhone 17 Pro",
+            platform: "iOS",
+            osVersion: "27.0",
+            state: "Shutdown",
+            kind: .simulator,
+            isAvailable: true
+        )
+        XCTAssertTrue(mac.isCompatible(with: schemeDestinations))
+        XCTAssertFalse(simulator.isCompatible(with: schemeDestinations))
+        XCTAssertEqual(
+            SchemeDestinationSupport.summary(for: schemeDestinations),
+            "This scheme only supports Mac destinations. Simulators and iOS devices are hidden."
+        )
+    }
+
+    func testSchemeDestinationCompatibilityKeepsIOSSimulators() {
+        let output = """
+        \t{ platform:macOS, arch:arm64, variant:Mac Catalyst, id:00008142-000E69EC3A22401C, name:My Mac }
+        \t{ platform:iOS Simulator, arch:arm64, id:0B18E454-36FC-44F0-B134-1B4F59DA9CD5, OS:27.0, name:iPhone 17 Pro }
+        \t{ platform:iOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-iphonesimulator:placeholder, name:Any iOS Simulator Device }
+        """
+        let schemeDestinations = DeveloperTooling.schemeRunDestinations(in: output)
+        let matchingSimulator = Destination(
+            udid: "0B18E454-36FC-44F0-B134-1B4F59DA9CD5",
+            name: "iPhone 17 Pro",
+            platform: "iOS",
+            osVersion: "27.0",
+            state: "Booted",
+            kind: .simulator,
+            isAvailable: true
+        )
+        let otherSimulator = Destination(
+            udid: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+            name: "iPhone 16",
+            platform: "iOS",
+            osVersion: "26.5",
+            state: "Shutdown",
+            kind: .simulator,
+            isAvailable: true
+        )
+        XCTAssertTrue(Destination.localMac.isCompatible(with: schemeDestinations))
+        XCTAssertTrue(matchingSimulator.isCompatible(with: schemeDestinations))
+        XCTAssertTrue(otherSimulator.isCompatible(with: schemeDestinations))
+        XCTAssertTrue(SchemeDestinationSupport.prefersMobileDestinations(schemeDestinations))
+    }
+
     func testSimctlFixtureParsing() throws {
         let fixtureURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -177,6 +235,14 @@ final class XerToolingTests: XCTestCase {
         let found = discovery.discover(in: root)
         XCTAssertEqual(found.map(\.kind), [.project])
         XCTAssertEqual(discovery.sharedSchemes(in: projectURL).map(\.name), ["App"])
+
+        let userSchemes = projectURL.appendingPathComponent(
+            "xcuserdata/tester.xcuserdatad/xcschemes",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: userSchemes, withIntermediateDirectories: true)
+        try Data("<Scheme />".utf8).write(to: userSchemes.appendingPathComponent("Debug.xcscheme"))
+        XCTAssertEqual(discovery.sharedSchemes(in: projectURL).map(\.name), ["App", "Debug"])
 
         let suiteName = "xer.tests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

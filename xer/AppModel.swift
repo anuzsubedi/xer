@@ -25,6 +25,7 @@ final class AppModel: ObservableObject {
     var parentScope: SecurityScopeAccess?
     let operationController = OperationController()
     var projectIconTask: Task<Void, Never>?
+    var schemeDestinationTask: Task<Void, Never>?
     var latestBuildArtifacts: [String: BuildArtifact] = [:]
     var hasRestored = false
 
@@ -92,6 +93,16 @@ final class AppModel: ObservableObject {
         set { destinationStore.searchQuery = newValue }
     }
 
+    var schemeCompatibleDestinationIDs: Set<String>? {
+        get { destinationStore.schemeCompatibleIDs }
+        set { destinationStore.schemeCompatibleIDs = newValue }
+    }
+
+    var schemeDestinationNote: String? {
+        get { destinationStore.schemeDestinationNote }
+        set { destinationStore.schemeDestinationNote = newValue }
+    }
+
     var selectedDestinationIDs: Set<String> {
         get { destinationStore.selectedIDs }
         set { destinationStore.selectedIDs = newValue }
@@ -129,7 +140,11 @@ final class AppModel: ObservableObject {
     }
 
     var selectedDestinations: [Destination] {
-        Destination.sorted(destinations.filter { $0.isReadyForDevelopment && selectedDestinationIDs.contains($0.id) })
+        Destination.sorted(destinations.filter {
+            $0.isReadyForDevelopment
+                && selectedDestinationIDs.contains($0.id)
+                && isCompatibleWithSelectedScheme($0)
+        })
     }
 
     var logs: [LogEntry] { logStore.entries }
@@ -139,7 +154,14 @@ final class AppModel: ObservableObject {
     /// query is tokenized, case/diacritic-insensitive, and matches names,
     /// platform, OS, identifiers, and status aliases.
     var filteredDestinations: [Destination] {
-        Destination.sorted(destinations.filter { $0.matchesSearch(destinationSearchQuery) })
+        Destination.sorted(destinations.filter {
+            $0.matchesSearch(destinationSearchQuery) && isCompatibleWithSelectedScheme($0)
+        })
+    }
+
+    func isCompatibleWithSelectedScheme(_ destination: Destination) -> Bool {
+        guard let schemeCompatibleDestinationIDs else { return true }
+        return schemeCompatibleDestinationIDs.contains(destination.id)
     }
 
     var connectedDestinations: [Destination] {

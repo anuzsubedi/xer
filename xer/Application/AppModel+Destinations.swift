@@ -110,5 +110,76 @@ extension AppModel {
         } else {
             operationState = failures.isEmpty ? .succeeded : .failed(failures.joined(separator: "\n"))
         }
+
+        await refreshSchemeCompatibleDestinations()
+    }
+
+    func refreshSchemeCompatibleDestinations() async {
+        schemeDestinationTask?.cancel()
+
+        let project = selectedProject
+        let scheme = selectedSchemeName
+        let currentDestinations = destinations
+
+        guard let project, project.isTrusted, let scheme, !scheme.isEmpty else {
+            schemeCompatibleDestinationIDs = nil
+            schemeDestinationNote = nil
+            return
+        }
+
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let schemeDestinations = try await self.tooling.listSchemeRunDestinations(
+                    for: project,
+                    scheme: scheme
+                )
+                guard !Task.isCancelled else { return }
+                guard self.selectedProjectID == project.id, self.selectedSchemeName == scheme else { return }
+                self.applySchemeDestinations(schemeDestinations, to: currentDestinations)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard self.selectedProjectID == project.id, self.selectedSchemeName == scheme else { return }
+                self.schemeCompatibleDestinationIDs = nil
+                self.schemeDestinationNote = nil
+                self.appendLog(.warning, "Could not read compatible destinations for \(scheme): \(UserFacingError.describe(error))")
+            }
+        }
+        schemeDestinationTask = task
+        await task.value
+    }
+
+    func applySchemeDestinations(_ schemeDestinations: [SchemeRunDestination], to available: [Destination]) {
+        let compatibleIDs = SchemeDestinationSupport.compatibleIDs(
+            in: available,
+            schemeDestinations: schemeDestinations
+        )
+        schemeCompatibleDestinationIDs = compatibleIDs
+        schemeDestinationNote = SchemeDestinationSupport.summary(for: schemeDestinations)
+
+        let remaining = selectedDestinationIDs.intersection(compatibleIDs)
+        if !remaining.isEmpty {
+            selectedDestinationIDs = remaining
+            return
+        }
+
+        let compatible = available.filter { compatibleIDs.contains($0.id) && $0.isReadyForDevelopment }
+        let preferred: Destination?
+        if SchemeDestinationSupport.prefersMobileDestinations(schemeDestinations) {
+            preferred = compatible.first {
+                $0.kind == .simulator
+                    && $0.state?.localizedCaseInsensitiveContains("booted") == true
+            }
+            ?? compatible.first { $0.kind == .simulator }
+            ?? compatible.first { $0.kind == .physicalDevice }
+            ?? compatible.first
+        } else {
+            preferred = compatible.first { $0.kind == .localMac } ?? compatible.first
+        }
+        selectedDestinationIDs = Set([preferred?.id].compactMap { $0 })
+        if let preferred {
+            appendLog(.info, "Selected \(preferred.name) because it matches the \(selectedSchemeName ?? "current") scheme.")
+        }
     }
 }

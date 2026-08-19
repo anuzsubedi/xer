@@ -56,6 +56,13 @@ extension ContentView {
                 developerToolsCallout(warning)
             }
 
+            if let note = model.schemeDestinationNote {
+                Label(note, systemImage: "desktopcomputer")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if model.isBusy && model.operationState == .refreshingDestinations && model.destinations.isEmpty {
                 HStack(spacing: 10) {
                     ProgressView().controlSize(.small)
