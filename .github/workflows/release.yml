@@ -85,6 +85,17 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${RELEASE_TAG#v}"
+          NOTES_FILE="$GITHUB_WORKSPACE/dist/release-notes.md"
+          MANUAL_NOTES_FILE="$GITHUB_WORKSPACE/docs/releases/${RELEASE_TAG}.md"
+          if [[ -f "$MANUAL_NOTES_FILE" ]]; then
+            cp "$MANUAL_NOTES_FILE" "$NOTES_FILE"
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$RELEASE_TAG" \
+              --jq .body > "$NOTES_FILE"
+          fi
+          test -s "$NOTES_FILE"
+
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" \
               dist/xer.dmg \
@@ -94,7 +105,7 @@ jobs:
               --clobber
             gh release edit "$RELEASE_TAG" \
               --title "xer $VERSION" \
-              --notes "Signed and notarized macOS release."
+              --notes-file "$NOTES_FILE"
           else
             gh release create "$RELEASE_TAG" \
               dist/xer.dmg \
@@ -104,7 +115,7 @@ jobs:
               --draft \
               --verify-tag \
               --title "xer $VERSION" \
-              --notes "Signed and notarized macOS release."
+              --notes-file "$NOTES_FILE"
           fi
 
       - name: Check out the update feed repository
@@ -134,15 +145,18 @@ jobs:
 
           cp xer-web-update-feed/public/appcast.xml "$UPDATES/appcast.xml"
           cp dist/xer.app.zip "$UPDATES/xer.app.zip"
+          cp dist/release-notes.md "$UPDATES/xer.app.md"
 
           printf '%s\n' "$SPARKLE_PRIVATE_KEY" | \
             "$TOOL_ROOT/bin/generate_appcast" \
               --ed-key-file - \
+              --embed-release-notes \
               --download-url-prefix "https://github.com/anuzsubedi/xer/releases/download/$RELEASE_TAG/" \
               "$UPDATES"
 
           test -s "$UPDATES/appcast.xml"
           grep -q 'sparkle:edSignature=' "$UPDATES/appcast.xml"
+          grep -q '<description>' "$UPDATES/appcast.xml"
           cp "$UPDATES/appcast.xml" xer-web-update-feed/public/appcast.xml
 
       - name: Publish GitHub release
