@@ -53,6 +53,71 @@ struct ProjectDiscovery: Sendable {
         }
     }
 
+    /// Returns the nearest directory xer can import: an Xcode container or a folder
+    /// that contains one. Walks upward from `url` when needed.
+    func resolveImportRoot(for url: URL) -> URL? {
+        var current = url.standardizedFileURL
+        if (try? current.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true {
+            current = current.deletingLastPathComponent()
+        }
+
+        while true {
+            if kind(of: current) != nil {
+                return current
+            }
+            if !discover(in: current).isEmpty {
+                return current
+            }
+
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path {
+                return nil
+            }
+            current = parent
+        }
+    }
+
+    /// Finds an imported project whose container or parent folder contains `url`.
+    func matchingProject(in projects: [ImportedProject], for url: URL) -> ImportedProject? {
+        let normalizedPath = url.standardizedFileURL.path
+        if let exact = projects.first(where: { $0.path == normalizedPath }) {
+            return exact
+        }
+
+        var current = URL(fileURLWithPath: normalizedPath, isDirectory: true).standardizedFileURL
+        while true {
+            if let match = projects.first(where: { project in
+                project.path == current.path
+                    || project.parentPath.map {
+                        URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL.path
+                    } == current.path
+            }) {
+                return match
+            }
+
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path {
+                break
+            }
+            current = parent
+        }
+
+        return projects.first { project in
+            normalizedPath == project.path
+                || normalizedPath.hasPrefix(project.path + "/")
+                || project.parentPath.map {
+                    normalizedPath == $0 || normalizedPath.hasPrefix($0 + "/")
+                } == true
+        }
+    }
+
+    func preferredProject(in projects: [ImportedProject], for url: URL) -> ImportedProject? {
+        if let match = matchingProject(in: projects, for: url) {
+            return match
+        }
+        return nil
+    }
+
     /// Reads scheme filenames from disk only. Importing an untrusted project must
     /// not invoke xcodebuild or execute package plugins/build phases.
     func sharedSchemes(in projectURL: URL) -> [SharedScheme] {

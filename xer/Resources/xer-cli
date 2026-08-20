@@ -1,0 +1,211 @@
+#!/bin/bash
+set -euo pipefail
+
+XER_BUNDLE_ID="dev.anuz.xer"
+XER_APP="${XER_APP:-}"
+
+resolve_xer_app() {
+  if [[ -n "$XER_APP" && -d "$XER_APP" ]]; then
+    return 0
+  fi
+
+  local app_path=""
+  app_path="$(/usr/bin/mdfind "kMDItemCFBundleIdentifier == '$XER_BUNDLE_ID'" 2>/dev/null | /usr/bin/head -n 1 || true)"
+  if [[ -n "$app_path" && -d "$app_path" ]]; then
+    XER_APP="$app_path"
+    return 0
+  fi
+
+  for candidate in "/Applications/xer.app" "$HOME/Applications/xer.app"; do
+    if [[ -d "$candidate" ]]; then
+      XER_APP="$candidate"
+      return 0
+    fi
+  done
+
+  echo "xer: could not locate the xer application. Install xer or reinstall the command from xer › Console › Terminal." >&2
+  exit 1
+}
+
+urlencode() {
+  /usr/bin/python3 - <<'PY' "$1"
+import sys, urllib.parse
+print(urllib.parse.quote(sys.argv[1], safe="/"))
+PY
+}
+
+resolve_directory() {
+  local target="${1:-.}"
+  if [[ "$target" == "." ]]; then
+    /bin/pwd -P
+    return 0
+  fi
+
+  if [[ ! -e "$target" ]]; then
+    echo "xer: no such file or directory: $target" >&2
+    return 1
+  fi
+
+  (
+    cd "$target" 2>/dev/null || {
+      echo "xer: not a directory: $target" >&2
+      exit 1
+    }
+    /bin/pwd -P
+  )
+}
+
+find_xcode_context() {
+  local start_path="$1"
+  local current="$start_path"
+
+  if [[ ! -d "$current" ]]; then
+    echo "xer: choose a folder, not a file." >&2
+    return 1
+  fi
+
+  while [[ "$current" != "/" ]]; do
+    case "$current" in
+      *.xcodeproj|*.xcworkspace)
+        printf '%s\n' "$current"
+        return 0
+        ;;
+    esac
+
+    local match=""
+    local ext item
+    for ext in xcworkspace xcodeproj; do
+      for item in "$current"/*."$ext"; do
+        [[ -e "$item" ]] || continue
+        match="$current"
+        break
+      done
+      [[ -n "$match" ]] && break
+    done
+
+    if [[ -n "$match" ]]; then
+      printf '%s\n' "$match"
+      return 0
+    fi
+
+    current="$(/usr/bin/dirname "$current")"
+  done
+
+  echo "xer: no .xcworkspace or .xcodeproj found in or above $start_path." >&2
+  return 1
+}
+
+project_imported() {
+  local search_path="$1"
+  local plist="$HOME/Library/Preferences/${XER_BUNDLE_ID}.plist"
+  [[ -f "$plist" ]] || return 1
+
+  /usr/bin/python3 - <<'PY' "$search_path" "$plist"
+import json
+import os
+import plistlib
+import sys
+
+search = os.path.realpath(sys.argv[1])
+plist_path = sys.argv[2]
+
+with open(plist_path, "rb") as handle:
+    plist = plistlib.load(handle)
+
+raw = plist.get("xer.importedProjects")
+if raw is None:
+    sys.exit(1)
+
+if isinstance(raw, bytes):
+    records = json.loads(raw.decode("utf-8"))
+else:
+    records = json.loads(raw)
+
+def contains(base: str, candidate: str) -> bool:
+    base = os.path.realpath(base)
+    candidate = os.path.realpath(candidate)
+    return candidate == base or candidate.startswith(base + os.sep)
+
+for record in records:
+    path = record.get("path")
+    parent = record.get("parentPath")
+    if path and contains(path, search):
+        sys.exit(0)
+    if parent and contains(parent, search):
+        sys.exit(0)
+
+sys.exit(1)
+PY
+}
+
+open_in_xer() {
+  local path="$1"
+  resolve_xer_app
+  /usr/bin/open -a "$XER_APP" --url "xer://open?path=$(urlencode "$path")"
+}
+
+run_in_xer() {
+  local path="$1"
+  resolve_xer_app
+  /usr/bin/open -a "$XER_APP" --url "xer://run?path=$(urlencode "$path")"
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  xer [path]         Open path in xer, importing it when needed (. means current directory)
+  xer open [path]    Same as xer [path]
+  xer run [path]     Build, install, and launch the imported project at path
+
+Examples:
+  xer .
+  xer /path/to/repo
+  xer run .
+EOF
+}
+
+main() {
+  local command="open"
+  local target="."
+
+  if [[ $# -gt 0 ]]; then
+    case "$1" in
+      -h|--help|help)
+        usage
+        exit 0
+        ;;
+      open|run)
+        command="$1"
+        shift
+        target="${1:-.}"
+        ;;
+      *)
+        target="$1"
+        ;;
+    esac
+  fi
+
+  local directory=""
+  directory="$(resolve_directory "$target")"
+  local context=""
+  context="$(find_xcode_context "$directory")"
+
+  case "$command" in
+    open)
+      open_in_xer "$context"
+      ;;
+    run)
+      if ! project_imported "$context"; then
+        echo "xer: this project is not imported yet. Run 'xer .' from the project folder first." >&2
+        exit 1
+      fi
+      run_in_xer "$directory"
+      ;;
+    *)
+      usage >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

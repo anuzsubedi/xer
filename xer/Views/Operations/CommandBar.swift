@@ -36,6 +36,9 @@ extension ContentView {
             .keyboardShortcut(".", modifiers: [.command])
             .disabled(!model.canStop)
             .help(model.canStop ? "Cancel the current operation (⌘.)" : "Nothing is currently running")
+
+            terminalCommandMenu
+                .labelStyle(.iconOnly)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
