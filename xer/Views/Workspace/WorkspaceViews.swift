@@ -96,12 +96,14 @@ extension ContentView {
             Label("Choose a project", systemImage: "hammer")
         } description: {
             Text("Select a discovered project in the sidebar, or import a folder to begin.")
-        } actions: {
+        }         actions: {
             Button("Import Folder…") {
                 model.chooseAndImportParentFolder()
             }
             .keyboardShortcut("o", modifiers: [.command])
             .disabled(model.isBusy)
+
+            terminalCommandMenu
         }
     }
 

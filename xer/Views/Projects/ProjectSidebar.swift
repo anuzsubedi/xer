@@ -135,6 +135,8 @@ extension ContentView {
 
                 sidebarSearchField
 
+                terminalCommandToolbarButton
+
                 Button {
                     updateManager.showUpdateCheck()
                 } label: {

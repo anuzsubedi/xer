@@ -10,6 +10,7 @@ import SwiftUI
 struct ContentView: View {
     @StateObject var model = AppModel()
     @EnvironmentObject var updateManager: UpdateManager
+    @EnvironmentObject var cliRequestRouter: CLIRequestRouter
     @Environment(\.colorScheme) var colorScheme
     @State var trustCandidateID: String?
     @State var projectQuery = ""
@@ -23,6 +24,8 @@ struct ContentView: View {
     @State var readyDestinationsOnly = false
     @State var consoleResizeStart: Double?
     @State var consoleDragHeight: Double?
+    @State var cliInstallMessage: String?
+    @State var cliInstallFailed = false
     @AppStorage("xer.consoleHeight") var consoleHeight = 390.0
     @AppStorage("xer.favoriteDestinationIDs") var favoriteDestinationStorage = ""
     @FocusState var isLogSearchFocused: Bool
@@ -52,6 +55,23 @@ struct ContentView: View {
                 model.refreshDestinations()
             }
             updateManager.checkForUpdatesInBackground()
+            handlePendingCLIRequestIfNeeded()
+        }
+        .onChange(of: cliRequestRouter.pendingRequest) { _, _ in
+            handlePendingCLIRequestIfNeeded()
+        }
+        .alert(
+            cliInstallFailed ? "Could Not Install Command" : "xer Command Installed",
+            isPresented: Binding(
+                get: { cliInstallMessage != nil },
+                set: { isPresented in
+                    if !isPresented { cliInstallMessage = nil }
+                }
+            )
+        ) {
+            Button("OK", role: .cancel) { cliInstallMessage = nil }
+        } message: {
+            Text(cliInstallMessage ?? "")
         }
         .sheet(
             isPresented: Binding(
@@ -109,5 +129,10 @@ struct ContentView: View {
         } message: {
             Text(removalCandidate?.message ?? "No files on disk are deleted.")
         }
+    }
+
+    func handlePendingCLIRequestIfNeeded() {
+        guard let request = cliRequestRouter.consumePendingRequest() else { return }
+        model.handleCLIRequest(request)
     }
 }

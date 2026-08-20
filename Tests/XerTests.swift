@@ -354,4 +354,62 @@ final class XerToolingTests: XCTestCase {
             // Expected: ProcessRunner terminates the child and propagates cancellation.
         }
     }
+
+    func testProjectDiscoveryResolveImportRootFindsNestedProject() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let repo = root.appendingPathComponent("repo", isDirectory: true)
+        let nested = repo.appendingPathComponent("Sources/App", isDirectory: true)
+        let project = repo.appendingPathComponent("Sample.xcodeproj", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+
+        let discovery = ProjectDiscovery()
+        let importRoot = discovery.resolveImportRoot(for: nested)
+        XCTAssertEqual(importRoot?.standardizedFileURL.path, repo.standardizedFileURL.path)
+
+        try FileManager.default.removeItem(at: root)
+    }
+
+    func testProjectDiscoveryMatchingProjectFindsImportedParent() {
+        let parent = "/tmp/xer-cli-parent"
+        let project = ImportedProject(
+            path: "/tmp/xer-cli-parent/App.xcodeproj",
+            kind: .project,
+            schemes: [SharedScheme(name: "App")],
+            isTrusted: true,
+            parentPath: parent
+        )
+        let discovery = ProjectDiscovery()
+        let match = discovery.matchingProject(
+            in: [project],
+            for: URL(fileURLWithPath: "/tmp/xer-cli-parent/Sources", isDirectory: true)
+        )
+        XCTAssertEqual(match?.id, project.id)
+    }
+
+    func testCLIRouteParserParsesOpenAndRunRequests() {
+        let openURL = URL(string: "xer://open?path=/tmp/MyApp.xcodeproj")!
+        let runURL = URL(string: "xer://run?path=/tmp/MyApp/Sources")!
+
+        XCTAssertEqual(CLIRouteParser.request(from: openURL), .open(path: "/tmp/MyApp.xcodeproj"))
+        XCTAssertEqual(CLIRouteParser.request(from: runURL), .run(path: "/tmp/MyApp/Sources"))
+    }
+
+    func testCLIInstallerDetectsZshProfile() {
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let shellName = URL(fileURLWithPath: shell).lastPathComponent
+        let profile = CLIInstaller.detectedShellProfileURL
+
+        switch shellName {
+        case "zsh":
+            XCTAssertEqual(profile?.lastPathComponent, ".zshrc")
+        case "bash":
+            XCTAssertTrue([".bash_profile", ".bashrc"].contains(profile?.lastPathComponent ?? ""))
+        case "fish":
+            XCTAssertEqual(profile?.lastPathComponent, "config.fish")
+        default:
+            XCTAssertEqual(profile?.lastPathComponent, ".profile")
+        }
+    }
 }
