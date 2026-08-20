@@ -23,12 +23,16 @@ extension ContentView {
                                 .foregroundStyle(.tertiary)
                             Text("No projects yet")
                                 .font(.headline)
-                            Text("Import a parent folder to discover .xcworkspace and .xcodeproj containers.")
+                            Text("Import a folder of projects, or add a single .xcodeproj / .xcworkspace.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
-                            Button("Choose Folder…") {
+                            Button("Import Folder…") {
                                 model.chooseAndImportParentFolder()
+                            }
+                            .disabled(model.isBusy)
+                            Button("Add Project…") {
+                                model.chooseAndImportProject()
                             }
                             .disabled(model.isBusy)
                         }
@@ -113,14 +117,18 @@ extension ContentView {
             Divider()
 
             HStack(spacing: 10) {
-                Button {
-                    model.chooseAndImportParentFolder()
+                Menu {
+                    Button("Import Folder…") {
+                        model.chooseAndImportParentFolder()
+                    }
+                    Button("Add Project…") {
+                        model.chooseAndImportProject()
+                    }
                 } label: {
                     Image(systemName: "plus")
                 }
-                .keyboardShortcut("o", modifiers: [.command])
-                .help("Import a folder containing Xcode workspaces or projects (⌘O)")
-                .accessibilityLabel("Import project folder")
+                .help("Import a folder of projects, or add a single project (⌘O / ⇧⌘O)")
+                .accessibilityLabel("Add projects")
                 .disabled(model.isBusy)
 
                 Button {
@@ -134,8 +142,6 @@ extension ContentView {
                 .accessibilityLabel("Remove project")
 
                 sidebarSearchField
-
-                terminalCommandToolbarButton
 
                 Button {
                     updateManager.showUpdateCheck()

@@ -95,59 +95,27 @@ find_xcode_context() {
   return 1
 }
 
-project_imported() {
-  local search_path="$1"
-  local plist="$HOME/Library/Preferences/${XER_BUNDLE_ID}.plist"
-  [[ -f "$plist" ]] || return 1
-
-  /usr/bin/python3 - <<'PY' "$search_path" "$plist"
-import json
-import os
-import plistlib
-import sys
-
-search = os.path.realpath(sys.argv[1])
-plist_path = sys.argv[2]
-
-with open(plist_path, "rb") as handle:
-    plist = plistlib.load(handle)
-
-raw = plist.get("xer.importedProjects")
-if raw is None:
-    sys.exit(1)
-
-if isinstance(raw, bytes):
-    records = json.loads(raw.decode("utf-8"))
-else:
-    records = json.loads(raw)
-
-def contains(base: str, candidate: str) -> bool:
-    base = os.path.realpath(base)
-    candidate = os.path.realpath(candidate)
-    return candidate == base or candidate.startswith(base + os.sep)
-
-for record in records:
-    path = record.get("path")
-    parent = record.get("parentPath")
-    if path and contains(path, search):
-        sys.exit(0)
-    if parent and contains(parent, search):
-        sys.exit(0)
-
-sys.exit(1)
-PY
-}
-
 open_in_xer() {
   local path="$1"
   resolve_xer_app
   /usr/bin/open -a "$XER_APP" --url "xer://open?path=$(urlencode "$path")"
 }
 
-run_in_xer() {
-  local path="$1"
+is_xer_running() {
+  [[ -n "$XER_APP" && -d "$XER_APP" ]] || return 1
+  /usr/bin/pgrep -fq "${XER_APP}/Contents/MacOS/" 2>/dev/null
+}
+
+refresh_in_xer() {
   resolve_xer_app
-  /usr/bin/open -a "$XER_APP" --url "xer://run?path=$(urlencode "$path")"
+  if ! is_xer_running; then
+    echo "xer: xer is not running. Open xer and run an app first." >&2
+    exit 1
+  fi
+
+  echo "Refreshing app..."
+  /usr/bin/open -g -a "$XER_APP" --url "xer://refresh"
+  echo "Refreshed app."
 }
 
 usage() {
@@ -155,12 +123,12 @@ usage() {
 Usage:
   xer [path]         Open path in xer, importing it when needed (. means current directory)
   xer open [path]    Same as xer [path]
-  xer run [path]     Build, install, and launch the imported project at path
+  xer refresh        Reload the app currently running in xer without bringing xer forward
 
 Examples:
   xer .
   xer /path/to/repo
-  xer run .
+  xer refresh
 EOF
 }
 
@@ -174,10 +142,14 @@ main() {
         usage
         exit 0
         ;;
-      open|run)
+      open)
         command="$1"
         shift
         target="${1:-.}"
+        ;;
+      refresh)
+        command="$1"
+        shift
         ;;
       *)
         target="$1"
@@ -185,21 +157,16 @@ main() {
     esac
   fi
 
-  local directory=""
-  directory="$(resolve_directory "$target")"
-  local context=""
-  context="$(find_xcode_context "$directory")"
-
   case "$command" in
     open)
+      local directory=""
+      directory="$(resolve_directory "$target")"
+      local context=""
+      context="$(find_xcode_context "$directory")"
       open_in_xer "$context"
       ;;
-    run)
-      if ! project_imported "$context"; then
-        echo "xer: this project is not imported yet. Run 'xer .' from the project folder first." >&2
-        exit 1
-      fi
-      run_in_xer "$directory"
+    refresh)
+      refresh_in_xer
       ;;
     *)
       usage >&2

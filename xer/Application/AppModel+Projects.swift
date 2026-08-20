@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
 
 extension AppModel {
 
@@ -74,8 +75,8 @@ extension AppModel {
         guard !isBusy else { return }
 
         let panel = NSOpenPanel()
-        panel.title = "Import Parent Folder"
-        panel.message = "Choose a folder containing .xcworkspace or .xcodeproj packages."
+        panel.title = "Import Folder"
+        panel.message = "Choose a folder containing one or more .xcworkspace or .xcodeproj packages."
         panel.prompt = "Import"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -86,21 +87,57 @@ extension AppModel {
         importParentFolder(url)
     }
 
+    func chooseAndImportProject() {
+        guard !isBusy else { return }
+
+        let panel = NSOpenPanel()
+        panel.title = "Add Project"
+        panel.message = "Choose a single .xcodeproj or .xcworkspace package."
+        panel.prompt = "Add"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.treatsFilePackagesAsDirectories = false
+        panel.allowedContentTypes = ProjectImportMode.projectContentTypes
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        importProject(url)
+    }
+
     func importParentFolder(_ url: URL) {
+        beginImport(from: url, preferredMode: .folder)
+    }
+
+    func importProject(_ url: URL) {
+        beginImport(from: url, preferredMode: .project)
+    }
+
+    func beginImport(from url: URL, preferredMode: ProjectImportMode) {
         guard !isBusy else { return }
         let normalizedURL = url.standardizedFileURL
         guard FileManager.default.fileExists(atPath: normalizedURL.path) else {
-            presentError("The selected parent folder no longer exists.")
+            presentError(preferredMode == .project
+                ? "The selected project no longer exists."
+                : "The selected parent folder no longer exists.")
             return
         }
 
+        let isProjectPackage = discovery.kind(of: normalizedURL) != nil
+        if preferredMode == .project && !isProjectPackage {
+            presentError("Choose an .xcodeproj or .xcworkspace package.")
+            return
+        }
+
+        let mode: ProjectImportMode = isProjectPackage ? .project : .folder
         lastIssue = nil
         operationState = .importing
-        appendLog(.command, "Inspecting imported folder \(normalizedURL.path)")
+        appendLog(.command, mode == .project
+            ? "Adding project \(normalizedURL.path)"
+            : "Inspecting imported folder \(normalizedURL.path)")
 
         operationTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.performImport(from: normalizedURL)
+            await self.performImport(from: normalizedURL, mode: mode)
             self.operationTask = nil
         }
     }
@@ -192,11 +229,13 @@ extension AppModel {
         appendLog(.info, "Removed imported folder \(folderName) and \(removedProjects.count) project record(s) from xer. No files were deleted.")
     }
 
-    func performImport(from parentURL: URL) async {
+    func performImport(from parentURL: URL, mode: ProjectImportMode = .folder) async {
         do {
             try Task.checkCancellation()
             guard (try? parentURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
-                throw AppFailure(message: "Choose a folder, not a file.")
+                throw AppFailure(message: mode == .project
+                    ? "Choose an .xcodeproj or .xcworkspace package."
+                    : "Choose a folder, not a file.")
             }
 
             // Keep the access alive for the complete inspection and bookmark
@@ -206,11 +245,14 @@ extension AppModel {
                 discovery.discover(in: parentURL)
             }.value
             guard !discovered.isEmpty else {
-                throw AppFailure(message: "No .xcworkspace or .xcodeproj packages were found in \(parentURL.path).")
+                throw AppFailure(message: mode == .project
+                    ? "\(parentURL.lastPathComponent) is not an Xcode project or workspace."
+                    : "No .xcworkspace or .xcodeproj packages were found in \(parentURL.path).")
             }
 
             try Task.checkCancellation()
 
+            let groupingPath = mode.groupingPath(for: parentURL)
             let storedByPath = Dictionary(
                 bookmarkStore.storedProjects().map { ($0.path, $0) },
                 uniquingKeysWith: { _, latest in latest }
@@ -237,7 +279,7 @@ extension AppModel {
                     kind: item.kind,
                     schemes: schemes,
                     isTrusted: previous?.isTrusted ?? stored?.isTrusted ?? false,
-                    parentPath: parentURL.path
+                    parentPath: groupingPath
                 )
 
                 newScopes[path] = SecurityScopeAccess(url: item.url)
@@ -251,16 +293,19 @@ extension AppModel {
             }
 
             try Task.checkCancellation()
-            if !bookmarkStore.saveParentFolder(parentURL) {
+            if mode == .folder, !bookmarkStore.saveParentFolder(parentURL) {
                 appendLog(.warning, "Could not persist a security-scoped bookmark for \(parentURL.path). The folder may need to be imported again after restarting xer.")
             }
-            let normalizedParentPath = parentURL.standardizedFileURL.path
             let importedPaths = Set(imported.map(\.path))
             let retainedProjects = projects.filter { project in
+                if importedPaths.contains(project.path) {
+                    return false
+                }
+                guard mode == .folder else { return true }
                 let existingParentPath = project.parentPath.map {
                     URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL.path
                 }
-                return existingParentPath != normalizedParentPath && !importedPaths.contains(project.path)
+                return existingParentPath != groupingPath
             }
             let mergedProjects = (retainedProjects + imported).sorted {
                 $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
@@ -270,8 +315,10 @@ extension AppModel {
             }
             bookmarkStore.removeProjects(notIn: Set(mergedProjects.map(\.path)))
 
-            parentScope = parentAccess
-            parentFolderURL = parentURL
+            if mode == .folder {
+                parentScope = parentAccess
+                parentFolderURL = parentURL
+            }
             projects = mergedProjects
             projectScopes = projectScopes.filter { path, _ in
                 retainedProjects.contains(where: { $0.path == path })
@@ -289,7 +336,11 @@ extension AppModel {
             selectedDestinationIDs = selectedDestinationIDs.intersection(
                 Set(destinations.filter(\.isReadyForDevelopment).map(\.id))
             )
-            appendLog(.info, "Imported \(imported.count) project container(s) from \(parentURL.path). Trust is required per project before xcodebuild operations.")
+            if mode == .project, let added = imported.first {
+                appendLog(.info, "Added \(added.displayName) to xer. Trust is required before xcodebuild operations.")
+            } else {
+                appendLog(.info, "Imported \(imported.count) project container(s) from \(parentURL.path). Trust is required per project before xcodebuild operations.")
+            }
             operationState = .succeeded
             await loadSchemesForSelectedProjectIfNeeded()
         } catch is CancellationError {

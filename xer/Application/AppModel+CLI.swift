@@ -3,22 +3,31 @@ import Foundation
 
 enum CLIRequest: Equatable, Sendable {
     case open(path: String)
-    case run(path: String)
+    case refresh
+
+    var bringsApplicationToFront: Bool {
+        switch self {
+        case .open:
+            true
+        case .refresh:
+            false
+        }
+    }
 }
 
 extension AppModel {
 
     func handleCLIRequest(_ request: CLIRequest) {
-        operationTask?.cancel()
-        operationTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            switch request {
-            case .open(let path):
+        switch request {
+        case .open(let path):
+            operationTask?.cancel()
+            operationTask = Task { @MainActor [weak self] in
+                guard let self else { return }
                 await self.handleOpenCLIRequest(path: path)
-            case .run(let path):
-                await self.handleRunCLIRequest(path: path)
+                self.operationTask = nil
             }
-            self.operationTask = nil
+        case .refresh:
+            handleRefreshCLIRequest()
         }
     }
 
@@ -45,7 +54,8 @@ extension AppModel {
         }
 
         appendLog(.command, "Opening \(importRoot.path) from the xer command.")
-        await performImport(from: importRoot)
+        let mode: ProjectImportMode = discovery.kind(of: importRoot) == nil ? .folder : .project
+        await performImport(from: importRoot, mode: mode)
 
         if let imported = discovery.preferredProject(in: projects, for: fileURL) {
             selectProject(imported.id)
@@ -57,44 +67,13 @@ extension AppModel {
         await loadSchemesForSelectedProjectIfNeeded()
     }
 
-    func handleRunCLIRequest(path: String) async {
-        let fileURL = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            presentError("The selected path no longer exists at \(fileURL.path).")
-            activateApplicationWindow()
+    func handleRefreshCLIRequest() {
+        guard isAppActive else {
+            appendLog(.info, "No current build running.")
             return
         }
 
-        guard discovery.resolveImportRoot(for: fileURL) != nil else {
-            presentError("No .xcworkspace or .xcodeproj packages were found in or above \(fileURL.path).")
-            activateApplicationWindow()
-            return
-        }
-
-        guard let project = discovery.preferredProject(in: projects, for: fileURL) else {
-            presentError("This project is not imported yet. Run 'xer .' from the project folder first.")
-            activateApplicationWindow()
-            return
-        }
-
-        selectProject(project.id)
-        activateApplicationWindow()
-        await loadSchemesForSelectedProjectIfNeeded()
-
-        guard project.isTrusted else {
-            presentError("Trust \(project.displayName) in xer before running it from the terminal.")
-            return
-        }
-        guard selectedSchemeName?.isEmpty == false else {
-            presentError("Select a shared scheme in xer before running this project from the terminal.")
-            return
-        }
-        guard !selectedDestinations.isEmpty else {
-            presentError("Select at least one ready destination in xer before running this project from the terminal.")
-            return
-        }
-
-        appendLog(.command, "Run requested from the xer command for \(project.displayName).")
+        appendLog(.info, "Refreshing app from the xer command.")
         runOrRestart()
     }
 

@@ -8,10 +8,34 @@ struct CLIInstallResult {
     let shellProfileCreated: Bool
 }
 
+struct CLIDocumentedCommand: Identifiable, Equatable, Sendable {
+    let id: String
+    let invocation: String
+    let summary: String
+}
+
 enum CLIInstaller {
     static let commandName = "xer"
     static let bundledScriptName = "xer-cli"
     static let profileMarker = "# xer command"
+
+    static let documentedCommands: [CLIDocumentedCommand] = [
+        CLIDocumentedCommand(
+            id: "open-cwd",
+            invocation: "xer .",
+            summary: "Open the current directory in xer, importing the project when needed."
+        ),
+        CLIDocumentedCommand(
+            id: "open-path",
+            invocation: "xer /path/to/repo",
+            summary: "Open a folder, .xcodeproj, or .xcworkspace from any path."
+        ),
+        CLIDocumentedCommand(
+            id: "refresh",
+            invocation: "xer refresh",
+            summary: "Rebuild and relaunch the app currently running in xer, without bringing xer forward."
+        )
+    ]
 
     static var defaultInstallDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser

@@ -388,12 +388,33 @@ final class XerToolingTests: XCTestCase {
         XCTAssertEqual(match?.id, project.id)
     }
 
-    func testCLIRouteParserParsesOpenAndRunRequests() {
+    func testCLIRouteParserParsesOpenAndRefreshRequests() {
         let openURL = URL(string: "xer://open?path=/tmp/MyApp.xcodeproj")!
-        let runURL = URL(string: "xer://run?path=/tmp/MyApp/Sources")!
+        let refreshURL = URL(string: "xer://refresh")!
 
         XCTAssertEqual(CLIRouteParser.request(from: openURL), .open(path: "/tmp/MyApp.xcodeproj"))
-        XCTAssertEqual(CLIRouteParser.request(from: runURL), .run(path: "/tmp/MyApp/Sources"))
+        XCTAssertEqual(CLIRouteParser.request(from: refreshURL), .refresh)
+        XCTAssertTrue(CLIRequest.open(path: "/tmp/MyApp.xcodeproj").bringsApplicationToFront)
+        XCTAssertFalse(CLIRequest.refresh.bringsApplicationToFront)
+    }
+
+    func testProjectImportModeGroupsSingleProjectsUnderTheirParentFolder() {
+        let projectURL = URL(fileURLWithPath: "/tmp/Apps/MyApp.xcodeproj", isDirectory: true)
+        XCTAssertEqual(
+            ProjectImportMode.project.groupingPath(for: projectURL),
+            "/tmp/Apps"
+        )
+        XCTAssertEqual(
+            ProjectImportMode.folder.groupingPath(for: URL(fileURLWithPath: "/tmp/Apps", isDirectory: true)),
+            "/tmp/Apps"
+        )
+    }
+
+    func testCLIInstallerDocumentsTerminalCommands() {
+        XCTAssertEqual(
+            CLIInstaller.documentedCommands.map(\.invocation),
+            ["xer .", "xer /path/to/repo", "xer refresh"]
+        )
     }
 
     func testCLIInstallerDetectsZshProfile() {

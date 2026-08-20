@@ -8,7 +8,7 @@ struct xerApp: App {
 
     var body: some Scene {
         let _ = Self.configure(appDelegate: appDelegate, router: cliRequestRouter)
-        return WindowGroup("xer") {
+        return Window("xer", id: "main") {
             ContentView()
                 .environmentObject(updateManager)
                 .environmentObject(cliRequestRouter)
@@ -20,6 +20,10 @@ struct xerApp: App {
         .windowToolbarStyle(.unifiedCompact)
         .defaultSize(width: 1_360, height: 820)
         .windowResizability(.contentSize)
+        .handlesExternalEvents(matching: Set(["xer", "open"]))
+        .commands {
+            XerCommands()
+        }
     }
 
     private static func configure(appDelegate: XerAppDelegate, router: CLIRequestRouter) -> Bool {

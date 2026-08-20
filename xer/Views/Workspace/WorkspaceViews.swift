@@ -95,15 +95,23 @@ extension ContentView {
         ContentUnavailableView {
             Label("Choose a project", systemImage: "hammer")
         } description: {
-            Text("Select a discovered project in the sidebar, or import a folder to begin.")
-        }         actions: {
+            Text("Select a discovered project in the sidebar, or import a folder or project to begin.")
+        } actions: {
             Button("Import Folder…") {
                 model.chooseAndImportParentFolder()
             }
             .keyboardShortcut("o", modifiers: [.command])
             .disabled(model.isBusy)
 
-            terminalCommandMenu
+            Button("Add Project…") {
+                model.chooseAndImportProject()
+            }
+            .keyboardShortcut("o", modifiers: [.command, .shift])
+            .disabled(model.isBusy)
+
+            Button("Terminal Commands…") {
+                showTerminalCommands = true
+            }
         }
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 /// The project container types that xcodebuild can open without launching Xcode.
 enum ProjectKind: String, Codable, CaseIterable, Sendable {
@@ -54,4 +55,24 @@ struct StoredProject: Codable, Sendable {
 struct DiscoveryResult: Sendable {
     let projects: [ImportedProject]
     let parentURL: URL
+}
+
+enum ProjectImportMode: Sendable {
+    case folder
+    case project
+
+    static var projectContentTypes: [UTType] {
+        [UTType(filenameExtension: "xcodeproj"), UTType(filenameExtension: "xcworkspace")]
+            .compactMap { $0 }
+    }
+
+    func groupingPath(for url: URL) -> String {
+        let normalized = url.standardizedFileURL
+        switch self {
+        case .folder:
+            return normalized.path
+        case .project:
+            return normalized.deletingLastPathComponent().path
+        }
+    }
 }

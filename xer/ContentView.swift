@@ -26,6 +26,8 @@ struct ContentView: View {
     @State var consoleDragHeight: Double?
     @State var cliInstallMessage: String?
     @State var cliInstallFailed = false
+    @State var showTerminalCommands = false
+    @State var cliCommandRevision = 0
     @AppStorage("xer.consoleHeight") var consoleHeight = 390.0
     @AppStorage("xer.favoriteDestinationIDs") var favoriteDestinationStorage = ""
     @FocusState var isLogSearchFocused: Bool
@@ -61,7 +63,7 @@ struct ContentView: View {
             handlePendingCLIRequestIfNeeded()
         }
         .alert(
-            cliInstallFailed ? "Could Not Install Command" : "xer Command Installed",
+            cliInstallAlertTitle,
             isPresented: Binding(
                 get: { cliInstallMessage != nil },
                 set: { isPresented in
@@ -73,6 +75,17 @@ struct ContentView: View {
         } message: {
             Text(cliInstallMessage ?? "")
         }
+        .sheet(isPresented: $showTerminalCommands) {
+            TerminalCommandsSheet(
+                isInstalled: CLIInstaller.isInstalled,
+                installPath: CLIInstaller.installURL.path,
+                install: installCLICommand,
+                remove: removeCLICommand,
+                dismiss: { showTerminalCommands = false }
+            )
+            .id(cliCommandRevision)
+        }
+        .focusedSceneValue(\.xerMenuActions, xerMenuActions)
         .sheet(
             isPresented: Binding(
                 get: { model.lastIssue != nil },
@@ -134,5 +147,17 @@ struct ContentView: View {
     func handlePendingCLIRequestIfNeeded() {
         guard let request = cliRequestRouter.consumePendingRequest() else { return }
         model.handleCLIRequest(request)
+    }
+
+    var xerMenuActions: XerMenuActions {
+        XerMenuActions(
+            isBusy: model.isBusy,
+            isCommandInstalled: CLIInstaller.isInstalled,
+            importFolder: { model.chooseAndImportParentFolder() },
+            addProject: { model.chooseAndImportProject() },
+            installCommand: installCLICommand,
+            removeCommand: removeCLICommand,
+            showTerminalCommands: { showTerminalCommands = true }
+        )
     }
 }

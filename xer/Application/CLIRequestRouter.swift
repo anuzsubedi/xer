@@ -20,12 +20,16 @@ enum CLIRouteParser {
         guard url.scheme?.lowercased() == "xer" else { return nil }
 
         let action: String
-        if let host = url.host?.lowercased(), host == "open" || host == "run" {
+        if let host = url.host?.lowercased(), host == "open" || host == "refresh" {
             action = host
-        } else if url.path == "/open" || url.path == "/run" {
+        } else if url.path == "/open" || url.path == "/refresh" {
             action = String(url.path.dropFirst())
         } else {
             action = "open"
+        }
+
+        if action == "refresh" {
+            return .refresh
         }
 
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -35,11 +39,6 @@ enum CLIRouteParser {
         }
 
         let decodedPath = rawPath.removingPercentEncoding ?? rawPath
-        switch action {
-        case "run":
-            return .run(path: decodedPath)
-        default:
-            return .open(path: decodedPath)
-        }
+        return .open(path: decodedPath)
     }
 }
